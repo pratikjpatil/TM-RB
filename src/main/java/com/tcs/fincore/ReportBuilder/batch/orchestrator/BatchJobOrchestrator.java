@@ -13,6 +13,7 @@ import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.materializer.BatchDataMaterializer;
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
 import com.tcs.fincore.ReportBuilder.batch.processor.GlobalParamBatchProcessor;
+import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
@@ -69,6 +70,7 @@ public class BatchJobOrchestrator {
     private final QueryPatternAnalyzer patternAnalyzer;
     private final BatchDataMaterializer dataMaterializer;
     private final ResultDistributor resultDistributor;
+    private final BatchResultStore batchResultStore;
     private final CalculationService calculationService;
     private final ExporterFactory exporterFactory;
     private final AggregatorService aggregatorService;
@@ -87,6 +89,12 @@ public class BatchJobOrchestrator {
 
     @Value("${report.batch.status.ttl-minutes:120}")
     private long statusTtlMinutes;
+
+    @Value("${report.batch.materialization.max-inmemory-estimated-rows:2000000}")
+    private long maxInMemoryEstimatedRows;
+
+    @Value("${report.batch.result-store:memory}")
+    private String resultStoreType;
 
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
@@ -267,7 +275,7 @@ public class BatchJobOrchestrator {
 
             if (analysis.useBatchMode) {
                 updatePhase(status, BatchJobStatus.JobPhase.MATERIALIZING_DATA);
-                materializeData(analysis);
+                materializeData(jobId, analysis);
             } else {
                 log.info("Batch mode not beneficial — using sequential per-report queries");
             }
@@ -300,6 +308,8 @@ public class BatchJobOrchestrator {
             eventPublisher.publishBatchTerminal(context, status, jobStartInstant);
 
         } finally {
+            batchResultStore.cleanupJob(jobId);
+            resultDistributor.clearJobContext(jobId);
             cancellationTokens.remove(jobId);
             jobFutures.remove(jobId);
             // NOTE: executionContexts is cleaned up by evictStaleJobStatuses
@@ -360,20 +370,27 @@ public class BatchJobOrchestrator {
     // Phase 2: Data Materialization (unchanged)
     // -------------------------------------------------------------------------
 
-    private void materializeData(AnalysisResult analysis) {
+    private void materializeData(String jobId, AnalysisResult analysis) {
         log.info("Phase 2: Materializing {} patterns (timeout={}m)",
                 analysis.patterns.size(), materializationTimeoutMinutes);
         long startTime = System.currentTimeMillis();
 
-        Map<String, Map<String, Map<String, Object>>> batchResults =
-                dataMaterializer.materializeAll(analysis.patterns, materializationTimeoutMinutes);
+        long estimatedRows = analysis.patterns.stream().mapToLong(QueryPattern::estimateResultSetSize).sum();
+        if ("memory".equalsIgnoreCase(resultStoreType) && estimatedRows > maxInMemoryEstimatedRows) {
+            throw new ValidationException("Estimated materialized rows " + estimatedRows
+                    + " exceed in-memory threshold " + maxInMemoryEstimatedRows
+                    + ". Switch to Redis result store for large batch workloads.");
+        }
+
+        batchResultStore.initializeJob(jobId, Duration.ofMinutes(statusTtlMinutes));
+        dataMaterializer.materializeAll(jobId, analysis.patterns, materializationTimeoutMinutes);
 
         resultDistributor.initialize(
-                batchResults, analysis.patterns,
+                jobId, analysis.patterns,
                 analysis.preFetchedGlobals, analysis.template);
 
         log.info("Phase 2 complete in {}ms: {} patterns materialized",
-                System.currentTimeMillis() - startTime, batchResults.size());
+                System.currentTimeMillis() - startTime, analysis.patterns.size());
     }
 
     // -------------------------------------------------------------------------
@@ -463,7 +480,7 @@ public class BatchJobOrchestrator {
 
         Map<String, Object> dataResults;
         if (analysis.useBatchMode) {
-            dataResults = resultDistributor.getResultsForDimension(dimensionValue, currentSpecs);
+            dataResults = resultDistributor.getResultsForDimension(request.getJobId(), dimensionValue, currentSpecs);
             List<DataSourceSpec> fallbackSpecs = new ArrayList<>();
             for (DataSourceSpec spec : currentSpecs) {
                 if ("FALLBACK".equals(dataResults.get(spec.getSpecId()))) {

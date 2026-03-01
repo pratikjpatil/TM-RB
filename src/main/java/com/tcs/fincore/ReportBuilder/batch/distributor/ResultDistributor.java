@@ -4,33 +4,35 @@
 package com.tcs.fincore.ReportBuilder.batch.distributor;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
+import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class ResultDistributor {
 
-    private Map<String, Map<String, Map<String, Object>>> batchResults;
-    private Map<String, QueryPattern> specToPatternMap;
-    private Map<String, Map<String, Object>> preFetchedGlobals;
-    private Map<String, String> columnToGlobalMap;
+    private final BatchResultStore batchResultStore;
+
+    private final Map<String, JobDistributionContext> jobContexts = new java.util.concurrent.ConcurrentHashMap<>();
 
     public void initialize(
-            Map<String, Map<String, Map<String, Object>>> batchResults,
+            String jobId,
             List<QueryPattern> patterns,
             Map<String, Map<String, Object>> preFetchedGlobals,
             ReportTemplate template
     ) {
-        this.batchResults = batchResults;
-        this.specToPatternMap = buildSpecToPatternMap(patterns);
-        this.preFetchedGlobals = preFetchedGlobals;
-        this.columnToGlobalMap = buildColumnMap(template);
+        jobContexts.put(jobId, new JobDistributionContext(
+                buildSpecToPatternMap(patterns),
+                preFetchedGlobals,
+                buildColumnMap(template)
+        ));
     }
 
     private Map<String, String> buildColumnMap(ReportTemplate template) {
@@ -45,13 +47,14 @@ public class ResultDistributor {
         return map;
     }
 
-    public Map<String, Object> getResultsForDimension(String dimensionValue, List<DataSourceSpec> specs) {
-        if (batchResults == null) throw new IllegalStateException("Not initialized");
+    public Map<String, Object> getResultsForDimension(String jobId, String dimensionValue, List<DataSourceSpec> specs) {
+        JobDistributionContext context = jobContexts.get(jobId);
+        if (context == null) throw new IllegalStateException("Job context not initialized for " + jobId);
         Map<String, Object> results = new HashMap<>();
 
         for (DataSourceSpec spec : specs) {
             try {
-                Object val = extractValueForSpec(dimensionValue, spec);
+                Object val = extractValueForSpec(jobId, dimensionValue, spec, context);
                 if (val != null && !"FALLBACK".equals(val)) {
                     results.put(spec.getSpecId(), val);
                 } else {
@@ -73,22 +76,22 @@ public class ResultDistributor {
         return results;
     }
 
-    private Object extractValueForSpec(String dimensionValue, DataSourceSpec spec) {
-        QueryPattern pattern = specToPatternMap.get(spec.getSpecId());
+    private Object extractValueForSpec(String jobId, String dimensionValue, DataSourceSpec spec,
+                                       JobDistributionContext context) {
+        QueryPattern pattern = context.specToPatternMap().get(spec.getSpecId());
         if (pattern == null) return "FALLBACK";
 
-        if (!batchResults.containsKey(pattern.getPatternId())) return "FALLBACK";
-        Map<String, Map<String, Object>> patternData = batchResults.get(pattern.getPatternId());
+        if (!batchResultStore.hasPattern(jobId, pattern.getPatternId())) return "FALLBACK";
 
-        // 1. Try Specific Dimension (e.g. Branch Code)
-        Map<String, Object> data = patternData.get(dimensionValue);
-        // 2. Try DEFAULT (for non-varying patterns)
-        if (data == null) data = patternData.get("DEFAULT");
+        // 1. Resolve Keys
+        List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern, context);
+        Set<String> keySet = new LinkedHashSet<>(bulkKeys);
+        Map<String, Object> data = batchResultStore.fetchValues(jobId, pattern.getPatternId(), dimensionValue, keySet);
+        if (data.isEmpty()) {
+            data = batchResultStore.fetchValues(jobId, pattern.getPatternId(), "DEFAULT", keySet);
+        }
 
-        if (data == null) return getDefaultValue(spec.getType());
-
-        // 3. Resolve Keys (FIXED: Supports Multiple Keys and Composite Keys)
-        List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern);
+        if (data.isEmpty()) return getDefaultValue(spec.getType());
 
         // 4. Aggregate values for all matched keys
         return aggregateValues(data, bulkKeys, spec.getType());
@@ -98,11 +101,12 @@ public class ResultDistributor {
      * FIXED: Returns a LIST of keys to look up.
      * Handles Indirection (Global Params) and Standard Bulk Filters.
      */
-    private List<String> resolveBulkKeys(DataSourceSpec spec, String dimensionValue, QueryPattern pattern) {
+    private List<String> resolveBulkKeys(DataSourceSpec spec, String dimensionValue, QueryPattern pattern,
+                                         JobDistributionContext context) {
         // A. check if this column is driven by a Global Param (Indirection)
-        String globalParamName = columnToGlobalMap.get(spec.getColumn());
-        if (globalParamName != null && preFetchedGlobals != null) {
-            Map<String, Object> globalValues = preFetchedGlobals.get(globalParamName);
+        String globalParamName = context.columnToGlobalMap().get(spec.getColumn());
+        if (globalParamName != null && context.preFetchedGlobals() != null) {
+            Map<String, Object> globalValues = context.preFetchedGlobals().get(globalParamName);
             if (globalValues != null && globalValues.containsKey(dimensionValue)) {
                 return Collections.singletonList(String.valueOf(globalValues.get(dimensionValue)));
             }
@@ -238,6 +242,17 @@ public class ResultDistributor {
         // For DB_VALUE or TEXT, we generally return the first match.
         // If multiple keys matched (e.g. IN clause for Text?), it's ambiguous, returning first is standard fallback.
         return values.get(0);
+    }
+
+    public void clearJobContext(String jobId) {
+        jobContexts.remove(jobId);
+    }
+
+    private record JobDistributionContext(
+            Map<String, QueryPattern> specToPatternMap,
+            Map<String, Map<String, Object>> preFetchedGlobals,
+            Map<String, String> columnToGlobalMap
+    ) {
     }
 
     private Object getDefaultValue(DataSourceSpec.Type type) {

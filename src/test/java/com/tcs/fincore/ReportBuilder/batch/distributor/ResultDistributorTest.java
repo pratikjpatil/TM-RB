@@ -1,0 +1,79 @@
+package com.tcs.fincore.ReportBuilder.batch.distributor;
+
+import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
+import com.tcs.fincore.ReportBuilder.batch.store.InMemoryBatchResultStore;
+import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
+import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class ResultDistributorTest {
+
+    private InMemoryBatchResultStore store;
+    private ResultDistributor distributor;
+
+    @BeforeEach
+    void setUp() {
+        store = new InMemoryBatchResultStore();
+        distributor = new ResultDistributor(store);
+    }
+
+    @Test
+    void shouldResolveValuesPerJobAndDimension() {
+        String jobId = "job-1";
+        String patternId = "p1";
+        String specId = "s1";
+
+        store.initializeJob(jobId, Duration.ofMinutes(5));
+        store.storeValue(jobId, patternId, "D1", "DEFAULT", 123.0);
+        store.markPatternAvailable(jobId, patternId);
+
+        QueryPattern pattern = QueryPattern.builder()
+                .patternId(patternId)
+                .sourceSpecIds(Set.of(specId))
+                .build();
+
+        distributor.initialize(jobId, List.of(pattern), null, new ReportTemplate());
+
+        DataSourceSpec spec = new DataSourceSpec(specId, DataSourceSpec.Type.DB_SUM,
+                "T1", "AMOUNT", Map.of(), "");
+
+        Map<String, Object> result = distributor.getResultsForDimension(jobId, "D1", List.of(spec));
+
+        assertEquals(123.0, result.get(specId));
+    }
+
+    @Test
+    void shouldKeepContextsIsolatedAcrossJobs() {
+        QueryPattern pattern = QueryPattern.builder()
+                .patternId("pattern")
+                .sourceSpecIds(Set.of("s1"))
+                .build();
+
+        store.initializeJob("job-A", Duration.ofMinutes(5));
+        store.initializeJob("job-B", Duration.ofMinutes(5));
+        store.storeValue("job-A", "pattern", "A", "DEFAULT", 10.0);
+        store.storeValue("job-B", "pattern", "B", "DEFAULT", 20.0);
+        store.markPatternAvailable("job-A", "pattern");
+        store.markPatternAvailable("job-B", "pattern");
+
+        distributor.initialize("job-A", List.of(pattern), null, new ReportTemplate());
+        distributor.initialize("job-B", List.of(pattern), null, new ReportTemplate());
+
+        DataSourceSpec spec = new DataSourceSpec("s1", DataSourceSpec.Type.DB_SUM,
+                "T1", "AMOUNT", Map.of(), "");
+
+        Map<String, Object> resultA = distributor.getResultsForDimension("job-A", "A", List.of(spec));
+        Map<String, Object> resultB = distributor.getResultsForDimension("job-B", "B", List.of(spec));
+
+        assertEquals(10.0, resultA.get("s1"));
+        assertEquals(20.0, resultB.get("s1"));
+    }
+}
