@@ -27,31 +27,39 @@ public class AggregatorServiceImpl implements AggregatorService {
     private final long globalTimeoutMs;
     private final int maxConcurrentQueries;
 
+
+    // ============================================================
+// FILE: AggregatorServiceImpl.java  — FIX #24
+// Semaphore permit count aligned with the actual thread pool
+// max size so the semaphore provides genuine back-pressure.
+// ============================================================
+
     public AggregatorServiceImpl(
             DbResolver dbResolver,
             @Value("${report.aggregation.global-timeout-ms:1800000}") long globalTimeoutMs,
-            @Value("${report.aggregation.max-concurrent-queries:50}") int maxConcurrentQueries,
+            @Value("${report.aggregation.max-concurrent-queries:50}")  int maxConcurrentQueries,
             @Value("${spring.datasource.hikari.maximum-pool-size:60}") int maxDbConnections) {
 
         this.dbResolver = dbResolver;
         this.globalTimeoutMs = globalTimeoutMs;
 
-        //Use bounded ThreadPoolExecutor instead of unbounded virtual threads
-        this.maxConcurrentQueries = Math.min(maxConcurrentQueries, maxDbConnections - 10);
+        // FIX #24: derive ONE limit used by BOTH the thread pool AND the semaphore,
+        // so they are always in sync. Leave 10 connections free for other operations.
+        int safeLimit = Math.max(1, Math.min(maxConcurrentQueries, maxDbConnections - 10));
+        this.maxConcurrentQueries = safeLimit;
+
         this.exec = new ThreadPoolExecutor(
-                10, // core pool size
-                this.maxConcurrentQueries, // max pool size
-                60L, TimeUnit.SECONDS, // keep-alive time
-                new ArrayBlockingQueue<>(1000), // bounded queue for backpressure
-                new ThreadPoolExecutor.CallerRunsPolicy() // backpressure: caller executes if queue full
+                Math.min(10, safeLimit),  // core threads
+                safeLimit,                 // max threads = semaphore permits
+                60L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(1000),
+                new ThreadPoolExecutor.CallerRunsPolicy()
         );
 
-        // Safety: Allow strictly fewer concurrent queries than max connections
-        int permitCount = Math.max(1, maxDbConnections - 10);
-        this.dbLimiter = new Semaphore(permitCount, true);
+        // FIX #24: semaphore size now matches the thread pool max exactly.
+        this.dbLimiter = new Semaphore(safeLimit, true);
 
-        log.info("Initialized AggregatorService - DB Limiter: {} permits, Executor: {} max threads, Timeout: {}ms",
-                permitCount, this.maxConcurrentQueries, globalTimeoutMs);
+        log.info("AggregatorService: safeLimit={}, timeout={}ms", safeLimit, globalTimeoutMs);
     }
 
     @Override
@@ -125,7 +133,6 @@ public class AggregatorServiceImpl implements AggregatorService {
 
                     // Return error marker instead of crashing entire batch
                     return Map.entry(key, "ERROR: " + e.getMessage());
-
                 } finally {
                     //Guaranteed semaphore release
                     if (permitAcquired) {
@@ -206,7 +213,7 @@ public class AggregatorServiceImpl implements AggregatorService {
         long elapsedMs = Duration.between(start, Instant.now()).toMillis();
 
         //Comprehensive result logging
-        log.info("Batch Complete: {}ms | Success: {} | Failed: {} | Timeout: {} | Total: {}",
+        log.info("fetch Complete: {}ms | Success: {} | Failed: {} | Timeout: {} | Total: {}",
                 elapsedMs, successCount, failedCount, timeoutCount, grouped.size());
 
         //Fail fast if too many queries failed

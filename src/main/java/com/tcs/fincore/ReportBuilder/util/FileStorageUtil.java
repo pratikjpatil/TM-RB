@@ -6,6 +6,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
 import java.io.IOException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -15,42 +16,47 @@ import java.util.concurrent.locks.ReentrantLock;
 @Slf4j
 public class FileStorageUtil {
     
-    // Lock per path to allow concurrent writes to different files
-    private static final java.util.concurrent.ConcurrentHashMap<String, Lock> PATH_LOCKS = 
-        new java.util.concurrent.ConcurrentHashMap<>();
+//    // Lock per path to allow concurrent writes to different files
+//    private static final java.util.concurrent.ConcurrentHashMap<String, Lock> PATH_LOCKS =
+//        new java.util.concurrent.ConcurrentHashMap<>();
 
-    /**
-     * Thread-safe write to HDFS with proper error handling and automatic retry logic
-     * 
-     * @param data byte array to write
-     * @param fs HDFS FileSystem instance
-     * @param filePath target path in HDFS
-     * @throws IOException if write fails after retries
-     */
+
+    // ============================================================
+// FILE: FileStorageUtil.java  — FIX #13
+// PATH_LOCKS cleaned up after each use to prevent unbounded
+// memory growth across tens of thousands of HDFS writes.
+// ============================================================
+
     public static void writeToFile(byte[] data, FileSystem fs, Path filePath) throws IOException {
-        if (data == null || data.length == 0) {
+        if (data == null || data.length == 0)
             throw new IllegalArgumentException("Data cannot be null or empty");
-        }
-        
-        if (fs == null) {
+        if (fs == null)
             throw new IllegalArgumentException("FileSystem cannot be null");
-        }
-        
-        if (filePath == null) {
+        if (filePath == null)
             throw new IllegalArgumentException("FilePath cannot be null");
-        }
 
-        // Get or create lock for this specific path
-        Lock lock = PATH_LOCKS.computeIfAbsent(filePath.toString(), k -> new ReentrantLock());
-        
+        String pathKey = filePath.toString();
+        // FIX #13: computeIfAbsent creates the lock; we remove it after use.
+        ReentrantLock lock = (ReentrantLock) PATH_LOCKS.computeIfAbsent(
+                pathKey, k -> new ReentrantLock());
+
         lock.lock();
         try {
             writeWithRetry(data, fs, filePath, 3);
             log.debug("Successfully wrote {} bytes to HDFS: {}", data.length, filePath);
         } finally {
             lock.unlock();
+            // FIX #13: Remove the lock only if no other thread is waiting on it.
+            // ReentrantLock.hasQueuedThreads() is safe here because we still hold
+            // the lock key in the map; a concurrent writer will re-create it if needed.
+            if (!lock.hasQueuedThreads()) {
+                PATH_LOCKS.remove(pathKey, lock);
+            }
         }
     }
+    // Change field to use ReentrantLock (not the interface Lock) so hasQueuedThreads() is accessible:
+    private static final ConcurrentHashMap<String, ReentrantLock> PATH_LOCKS =
+            new ConcurrentHashMap<>();
 
     /**
      * Write with automatic retry logic for transient HDFS failures

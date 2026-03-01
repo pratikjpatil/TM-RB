@@ -5,9 +5,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.jexl3.*;
 import org.apache.commons.jexl3.introspection.JexlPermissions;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * PRODUCTION-GRADE: Central logic for resolving Global Params ($G{...})
@@ -18,17 +21,43 @@ import java.util.regex.Pattern;
 public class GlobalParamResolver {
 
     private static final Pattern GLOBAL_PATTERN = Pattern.compile("\\$G\\{([a-zA-Z0-9_]+)\\}");
+//    private static final JexlEngine jexl = new JexlBuilder()
+//            .cache(512)
+//            .strict(true)
+//            .silent(false)
+//            .permissions(JexlPermissions.UNRESTRICTED)
+//            .create();
+
+    /**
+     * SECURITY FIX: Replace UNRESTRICTED permissions with a strict allowlist.
+     * Only our own DateUtilsHelper and java.lang.Math are permitted.
+     * All Java reflection, runtime execution, file I/O, and class loading is blocked.
+     */
+    private static final JexlPermissions SAFE_PERMISSIONS = JexlPermissions.parse(
+            // Allow ONLY our utility classes and safe Java classes
+            "com.tcs.fincore.ReportBuilder.util.DateUtilsHelper",
+            "java.lang.Math",
+            "java.lang.String",
+            "java.lang.Number",
+            "java.time.LocalDate",
+            "java.time.LocalDateTime"
+    );
+
     private static final JexlEngine jexl = new JexlBuilder()
             .cache(512)
             .strict(true)
             .silent(false)
-            .permissions(JexlPermissions.UNRESTRICTED)
+            .permissions(SAFE_PERMISSIONS)
             .create();
+
+
+
 
     /**
      * Resolves a value which might be a literal, a global ref ($G), or an expression (#{}).
      */
     public static Object resolveValue(Object rawValue, Map<String, Object> runtimeParams) {
+
         if (rawValue == null) return null;
 
         // Return non-strings immediately (Numbers, Dates)
@@ -41,6 +70,7 @@ public class GlobalParamResolver {
         String trimmed = s.trim();
         if (trimmed.startsWith("#{") && trimmed.endsWith("}")) {
             String expression = trimmed.substring(2, trimmed.length() - 1);
+            log.debug("Runtime Params :: {}",runtimeParams);
             return evaluateExpression(expression, runtimeParams);
         }
 
@@ -53,7 +83,7 @@ public class GlobalParamResolver {
                 return runtimeParams.get(key);
             }
             // Should we return null or throw? Returning original allows lenient fallback.
-            log.warn("Global param '{}' not found in runtime context", key);
+//            log.warn("Global param '{}' not found in runtime context", key);
             //  Fail Fast
             throw new ValidationException("Runtime Error: Parameter '$G{" + key + "}' referenced but not found in context.");
 //            return rawValue;
@@ -76,13 +106,13 @@ public class GlobalParamResolver {
         if (input instanceof String) {
             return resolveValue(input, params);
         } else if (input instanceof Map) {
-            Map<String, Object> copy = new java.util.LinkedHashMap<>((Map<String, Object>) input);
+            Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) input);
             copy.replaceAll((k, v) -> resolveRecursive(v, params));
             return copy;
-        } else if (input instanceof java.util.List) {
-            return ((java.util.List<?>) input).stream()
+        } else if (input instanceof List) {
+            return ((List<?>) input).stream()
                     .map(i -> resolveRecursive(i, params))
-                    .collect(java.util.stream.Collectors.toList());
+                    .collect(Collectors.toList());
         }
         return input;
     }
@@ -103,7 +133,7 @@ public class GlobalParamResolver {
             // Evaluate
             JexlExpression e = jexl.createExpression(expression);
             Object result = e.evaluate(context);
-            log.info("Evaluated Expression: '{}' -> Result: {}", expression, result);
+
             if (log.isTraceEnabled()) {
                 log.trace("Evaluated Expression: '{}' -> Result: {}", expression, result);
             }

@@ -1,13 +1,12 @@
-
-
-
 package com.tcs.fincore.ReportBuilder.service.export;
 
-import com.lowagie.text.*;
-import com.lowagie.text.pdf.*;
+import org.openpdf.text.*;
+import org.openpdf.text.pdf.*;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
 import com.tcs.fincore.ReportBuilder.service.format.FormatUtils;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
@@ -35,6 +34,45 @@ public class PdfService implements ReportExporter {
     // Threshold for switching a metadata value from shared row to full row
     private static final int META_CHAR_THRESHOLD = 35;
 
+    // 1. Inject the path from properties (Default to classpath)
+    @Value("${report.logo.path:classpath:images/sbi-logo.png}")
+    private String configuredLogoPath;
+
+    // 2. Cache the actual Image object, not just the path
+    private Image cachedLogoImage;
+
+    @PostConstruct
+    public void init() {
+        // Load the image ONCE when the application starts
+        this.cachedLogoImage = loadLogo(configuredLogoPath);
+    }
+
+    private Image loadLogo(String path) {
+        if (path == null || path.isBlank()) return null;
+        try {
+            Image img;
+            if (path.startsWith("classpath:")) {
+                String resourceName = path.substring("classpath:".length());
+                java.net.URL url = getClass().getClassLoader().getResource(resourceName);
+                if (url == null) {
+                    log.error("Logo resource not found: {}", resourceName);
+                    return null;
+                }
+                img = Image.getInstance(url);
+            } else {
+                // Fallback for external files
+                img = Image.getInstance(path);
+            }
+            // Scale it once globally
+            img.scaleAbsolute(50f, 17f);
+            log.info("Logo loaded successfully from: {}", path);
+            return img;
+        } catch (Exception e) {
+            log.error("Failed to load logo from {}: {}", path, e.getMessage());
+            return null;
+        }
+    }
+
     @Override
     public boolean supports(String formatType) {
         return "pdf".equalsIgnoreCase(formatType);
@@ -61,20 +99,19 @@ public class PdfService implements ReportExporter {
             Rectangle pageSize = resolvePageSize(model.getPageSize(), model.getPageOrientation());
 
             // 2. Calculate Dynamic Top Margin
-            // We must calculate how tall the header is BEFORE creating the document
-            // so the body text starts at the correct Y position.
             float dynamicTopMargin = calculateDynamicHeaderMargin(model.getHeadingContent());
 
             // 3. Create Document with Dynamic Margin
-            // Left: 18, Right: 12, Top: Calculated, Bottom: 40
             Document document = new Document(pageSize, 18f, 12f, dynamicTopMargin, 40f);
 
             PdfWriter writer = PdfWriter.getInstance(document, baos);
 
+            Image logoForThisReport = (this.cachedLogoImage != null) ?
+                    Image.getInstance(this.cachedLogoImage) : null;
+
             // 4. Register Page Event
-            // This handles drawing the Logo, Title, and Metadata on every page
             writer.setPageEvent(new HeaderFooterPageEvent(
-                    model.getLogoPath(),
+                    logoForThisReport,
                     model.getTitle(),
                     model.getHeadingContent()
             ));
@@ -93,7 +130,7 @@ public class PdfService implements ReportExporter {
             float[] colWidths = computeColumnWidths(model.getColumns());
             PdfPTable table = new PdfPTable(colWidths);
             table.setWidthPercentage(100);
-            table.setHeaderRows(1); // Repeats the table header (column names) on new pages
+            table.setHeaderRows(1);
 
             // 7. Render Table Headers
             Font headerFont = FontFactory.getFont(FONT_NAME, 10f, Font.BOLD, Color.BLACK);
@@ -128,91 +165,59 @@ public class PdfService implements ReportExporter {
         }
     }
 
-    /**
-     * Calculates the required Top Margin dynamically.
-     * Formula: Base Height (Logo/Title) + Metadata Rows Height + Buffers.
-     */
     private float calculateDynamicHeaderMargin(List<Map<String, Object>> metadata) {
-        // Base height: Logo (17) + BankName (18) + Title (15) + Spacing (~30)
-        // 80f is a safe minimum for a header with NO metadata.
         float totalHeight = 80f;
 
         if (metadata != null && !metadata.isEmpty()) {
-            // Add vertical padding for the metadata wrapper (Top 5 + Bottom 6)
             totalHeight += 11f;
 
-            // Simulate the Grid Layout to count visual rows
             int rowCount = 0;
-            int itemsInCurrentRow = 0; // 0 = Left Slot, 1 = Right Slot
+            int itemsInCurrentRow = 0;
 
             for (Map<String, Object> m : metadata) {
                 String value = String.valueOf(m.get("value"));
                 boolean isLongValue = value.length() > META_CHAR_THRESHOLD;
 
                 if (isLongValue) {
-                    // If we have a pending item on the left, it finishes that row -> Row++
                     if (itemsInCurrentRow > 0) {
                         rowCount++;
                         itemsInCurrentRow = 0;
                     }
-                    // The long item takes its own full row -> Row++
                     rowCount++;
                 } else {
                     itemsInCurrentRow++;
-                    // If 2 items fill the row -> Row++
                     if (itemsInCurrentRow == 2) {
                         rowCount++;
                         itemsInCurrentRow = 0;
                     }
                 }
             }
-            // If an odd item is left at the end -> Row++
             if (itemsInCurrentRow > 0) {
                 rowCount++;
             }
 
-            // Estimate height per row (Font size + padding + leading approx 18f)
             float heightPerRow = 18f;
             totalHeight += (rowCount * heightPerRow);
         }
 
-        // Add a small safety buffer so text doesn't touch the header line
-//        return totalHeight + 5f;
         return totalHeight;
     }
 
-    /**
-     * Custom page event handler for headers and footers.
-     * Renders Logo, Bank Name, Report Title, and Metadata Grid on EVERY PAGE.
-     */
     private static class HeaderFooterPageEvent extends PdfPageEventHelper {
-        private final String logoPath;
+        private final Image logoImage;
         private final String reportTitle;
         private final List<Map<String, Object>> headingContent;
-        private Image logoImage;
 
-        public HeaderFooterPageEvent(String logoPath, String reportTitle, List<Map<String, Object>> headingContent) {
-            this.logoPath = logoPath;
+        public HeaderFooterPageEvent(Image logoImage, String reportTitle, List<Map<String, Object>> headingContent) {
+            this.logoImage = logoImage;
             this.reportTitle = reportTitle;
             this.headingContent = headingContent;
-
-            // Load logo once
-            if (logoPath != null && !logoPath.isBlank()) {
-                try {
-                    this.logoImage = Image.getInstance(logoPath);
-                    this.logoImage.scaleAbsolute(50f, 17f);
-                } catch (Exception e) {
-                    log.error("Could not load logo from path: {}", logoPath, e);
-                    this.logoImage = null;
-                }
-            }
         }
 
         @Override
         public void onEndPage(PdfWriter writer, Document document) {
             Rectangle pageSize = document.getPageSize();
 
-            // Container table for the whole header (1 column)
             PdfPTable headerTable = new PdfPTable(1);
             headerTable.setTotalWidth(pageSize.getWidth() - document.leftMargin() - document.rightMargin());
 
@@ -249,10 +254,9 @@ public class PdfService implements ReportExporter {
                     headerTable.addCell(titleCell);
                 }
 
-                // --- 4. Metadata Grid (The Smart 4-Column Layout) ---
+                // --- 4. Metadata Grid ---
                 if (headingContent != null && !headingContent.isEmpty()) {
 
-                    // Inner Table: 4 Columns [Label | Value | Label | Value]
                     float[] colWidths = new float[]{1.5f, 3.5f, 1.5f, 3.5f};
                     PdfPTable metaTable = new PdfPTable(colWidths);
                     metaTable.setWidthPercentage(100);
@@ -269,17 +273,14 @@ public class PdfService implements ReportExporter {
                         boolean isLongValue = value.length() > META_CHAR_THRESHOLD;
 
                         if (isLongValue) {
-                            // Close pending row if exists
                             if (itemsInCurrentRow % 2 != 0) {
                                 addSimpleCell(metaTable, "", metaLabelFont, false);
                                 addSimpleCell(metaTable, "", metaValueFont, false);
                                 itemsInCurrentRow = 0;
                             }
 
-                            // Add Label (Col 1)
                             addSimpleCell(metaTable, name, metaLabelFont, false);
 
-                            // Add Long Value (Colspan 3 -> Spans rest of table)
                             PdfPCell longCell = new PdfPCell(new Phrase(value, metaValueFont));
                             longCell.setBorder(Rectangle.NO_BORDER);
                             longCell.setPadding(2f);
@@ -288,37 +289,30 @@ public class PdfService implements ReportExporter {
 
                             itemsInCurrentRow = 0;
                         } else {
-                            // Standard Short Value
                             addSimpleCell(metaTable, name, metaLabelFont, false);
                             addSimpleCell(metaTable, value, metaValueFont, false);
 
                             itemsInCurrentRow++;
 
-                            // If row filled (2 items), reset
                             if (itemsInCurrentRow == 2) {
                                 itemsInCurrentRow = 0;
                             }
                         }
                     }
 
-                    // Final Cleanup for odd items
                     if (itemsInCurrentRow % 2 != 0) {
                         addSimpleCell(metaTable, "", metaLabelFont, false);
                         addSimpleCell(metaTable, "", metaValueFont, false);
                     }
 
-                    // --- Wrapper Cell for Padding ---
                     PdfPCell metaWrapper = new PdfPCell(metaTable);
                     metaWrapper.setBorder(Rectangle.NO_BORDER);
                     metaWrapper.setPaddingTop(5f);
-                    // PADDING REQUIREMENT: 6f below header
                     metaWrapper.setPaddingBottom(6f);
 
                     headerTable.addCell(metaWrapper);
                 }
 
-                // --- Write Header ---
-                // Write absolute position at top margin
                 headerTable.writeSelectedRows(0, -1,
                         document.leftMargin(),
                         pageSize.getHeight() - 14f,
@@ -328,7 +322,7 @@ public class PdfService implements ReportExporter {
                 log.error("Error creating header", e);
             }
 
-            // --- Footer (Page Number) ---
+            // --- Footer ---
             try {
                 Font footerFont = FontFactory.getFont(FONT_NAME, 9f, Font.NORMAL, Color.DARK_GRAY);
                 Phrase pagePhrase = new Phrase("Page " + writer.getPageNumber(), footerFont);
@@ -351,10 +345,6 @@ public class PdfService implements ReportExporter {
             table.addCell(cell);
         }
     }
-
-    // ==================================================================================
-    //  Standard Row Rendering & Helpers (Unchanged Logic)
-    // ==================================================================================
 
     private void renderRow(PdfPTable table, ExportModel.Row row, List<ExportModel.Column> cols,
                            Font fontRegular, Font fontBold, RowSpanState rowSpanState) {

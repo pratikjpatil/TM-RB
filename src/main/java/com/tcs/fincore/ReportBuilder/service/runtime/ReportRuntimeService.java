@@ -1,12 +1,5 @@
 
 
-
-
-
-
-
-
-
 package com.tcs.fincore.ReportBuilder.service.runtime;
 
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
@@ -23,8 +16,8 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * PRODUCTION-READY: Report Runtime Service V2.3
- * Fixed: Deep Resolution of $G{...} in Formula Expressions.
+ * PRODUCTION-READY: Report Runtime Service V2.4
+ * FIXED: Order of Placeholder Injection in applyBatchParams.
  */
 @Slf4j
 @Service
@@ -33,9 +26,7 @@ public class ReportRuntimeService {
 
     private final GlobalParamEngine globalParamEngine;
 
-    /**
-     * Prepares the template for a SINGLE execution (View/Download/Single Batch Iteration).
-     */
+    // ... (prepareRuntimeContext remains same) ...
     public void prepareRuntimeContext(
             ReportTemplate template,
             ReportVariant variant,
@@ -44,20 +35,13 @@ public class ReportRuntimeService {
         log.debug("Preparing runtime context. Input Params keys: {}",
                 inputParams != null ? inputParams.keySet() : "null");
 
-        // 1. Resolve Global Params
         Map<String, Object> runtimeContext = globalParamEngine.resolveContext(
                 template,
                 inputParams,
                 true
         );
-
-        // 2. Apply Column-Level Filters
         applyColumnFilters(template);
-
-        // 3. Resolve all Placeholders ($G{...}, #{...}) in the template structure
         resolveTemplateGlobals(template, runtimeContext);
-
-        // 4. Apply Variant Rules
         if (variant != null) {
             applyVariantAndParams(template, variant, runtimeContext);
         }
@@ -70,7 +54,8 @@ public class ReportRuntimeService {
             ReportTemplate template,
             ReportVariant variant,
             Map<String, Object> commonParams,
-            String varyingParamName) {
+            String varyingParamName,
+            Map<String, Map<String, Object>> preFetchedGlobals) {
 
         log.info("Applying batch params for template: {}, varying: {}",
                 template.getReportMeta().getReportId(), varyingParamName);
@@ -78,18 +63,32 @@ public class ReportRuntimeService {
         Map<String, Object> batchContext = new HashMap<>(commonParams != null ? commonParams : Map.of());
         batchContext = buildBatchGlobalContext(template, batchContext, varyingParamName);
 
-        // Inject placeholders for batch analysis to prevent resolution errors
+        // --- FIX START: Inject Varying Dimension Placeholder FIRST ---
+        if (varyingParamName != null) {
+            // Force the placeholder, overwriting any nulls/defaults
+            batchContext.put(varyingParamName, "BATCH_VAR_PLACEHOLDER");
+            log.debug("Injected BATCH_VAR_PLACEHOLDER for '{}'", varyingParamName);
+        }
+        // --- FIX END ---
+
+        // Inject placeholders for OTHER missing globals to prevent resolution errors
         if (template.getGlobalParams() != null) {
             for (ReportTemplate.GlobalParamDef def : template.getGlobalParams()) {
                 if (!batchContext.containsKey(def.getName())) {
-                    batchContext.put(def.getName(), "0"); // Use "0" to be safe for math formulas during analysis
-                    log.debug("Injected placeholder for skipped global '{}'", def.getName());
+//                    batchContext.put(def.getName(), "0");
+//                    log.debug("Injected safety placeholder '0' for skipped global '{}'", def.getName());
+
+                    // FIXED: If we have pre-fetched values, inject the whole COLLECTION.
+                    // This forces QueryPatternAnalyzer to create an IN clause (Bulk Filter).
+                    if (preFetchedGlobals != null && preFetchedGlobals.containsKey(def.getName())) {
+                        Collection<Object> distinctValues = new HashSet<>(preFetchedGlobals.get(def.getName()).values());
+                        batchContext.put(def.getName(), new ArrayList<>(distinctValues));
+                        log.debug("Injected BULK list for global '{}' ({} values)", def.getName(), distinctValues.size());
+                    } else {
+                        batchContext.put(def.getName(), "0"); // Fallback placeholder
+                    }
                 }
             }
-        }
-
-        if (varyingParamName != null && !batchContext.containsKey(varyingParamName)) {
-            batchContext.put(varyingParamName, "BATCH_VAR_PLACEHOLDER");
         }
 
         applyColumnFilters(template);
@@ -110,14 +109,16 @@ public class ReportRuntimeService {
     private void applyColumnFilters(ReportTemplate template) {
         if (template.getReportData() == null ||
                 template.getReportData().getColumns() == null ||
-                template.getReportData().getRows() == null) return;
+                template.getReportData().getRows() == null) {
+            return;
+        }
 
         List<ReportTemplate.ColumnDefinition> cols = template.getReportData().getColumns();
-        Map<Integer, List<Map<String, Object>>> activeColFilters = new HashMap<>();
-
+        Map<Integer, List<ReportTemplate.TemplateColumnFilter>> activeColFilters = new HashMap<>();
         for (int i = 0; i < cols.size(); i++) {
-            if (cols.get(i).getFilters() != null && !cols.get(i).getFilters().isEmpty()) {
-                activeColFilters.put(i, cols.get(i).getFilters());
+            if (cols.get(i).getTemplateColumnFilters() != null &&
+                    !cols.get(i).getTemplateColumnFilters().isEmpty()) {
+                activeColFilters.put(i, cols.get(i).getTemplateColumnFilters());
             }
         }
 
@@ -125,155 +126,122 @@ public class ReportRuntimeService {
 
         for (ReportTemplate.Row row : template.getReportData().getRows()) {
             if (row.getCells() == null) continue;
-            for (Map.Entry<Integer, List<Map<String, Object>>> entry : activeColFilters.entrySet()) {
+            for (Map.Entry<Integer, List<ReportTemplate.TemplateColumnFilter>> entry : activeColFilters.entrySet()) {
                 int colIdx = entry.getKey();
-                if (colIdx >= row.getCells().size()) continue;
+                List<ReportTemplate.TemplateColumnFilter> colFilters = entry.getValue();
 
+                if (colIdx >= row.getCells().size()) continue;
                 ReportTemplate.Cell cell = row.getCells().get(colIdx);
                 if (cell == null) continue;
 
                 if (cell.getType() != null && cell.getType().startsWith("DB_") && cell.getSource() != null) {
-                    mergeFiltersIntoSource(cell.getSource(), entry.getValue());
+                    applyFiltersToMapIfTableMatches(cell.getSource(), colFilters);
                 }
                 else if ("FORMULA".equalsIgnoreCase(cell.getType()) && cell.getVariables() != null) {
                     cell.getVariables().values().stream()
                             .filter(v -> v instanceof Map)
                             .map(v -> (Map<String, Object>) v)
                             .filter(m -> String.valueOf(m.get("type")).startsWith("DB_"))
-                            .forEach(m -> mergeFiltersIntoSource(m, entry.getValue()));
+                            .forEach(m -> applyFiltersToMapIfTableMatches(m, colFilters));
                 }
             }
         }
     }
 
-//    /**
-//     * Deep resolve all placeholders ($G and #{}) in the template.
-//     * FIXED: Now interpolates Formula expressions.
-//     */
-//    @SuppressWarnings("unchecked")
-//    private void resolveTemplateGlobals(ReportTemplate template, Map<String, Object> context) {
-//
-//        // Resolve Global Params in Report Extras (Header/Metadata)
-//        if (template.getReportMeta() != null && template.getReportMeta().getExtras() != null) {
-//            Object resolvedExtras = GlobalParamResolver.resolveRecursive(
-//                    template.getReportMeta().getExtras(),
-//                    context
-//            );
-//            template.getReportMeta().setExtras((List<Map<String, Object>>) resolvedExtras);
-//        }
-//
-//        if (template.getReportData().getRows() == null) return;
-//
-//        for (ReportTemplate.Row row : template.getReportData().getRows()) {
-//            // Dynamic Row Config
-//            if (row.getDynamicConfig() != null) {
-//                row.setDynamicConfig((Map<String, Object>)
-//                        GlobalParamResolver.resolveRecursive(row.getDynamicConfig(), context));
-//            }
-//
-//            if (row.getCells() == null) continue;
-//
-//            for (ReportTemplate.Cell cell : row.getCells()) {
-//                if (cell == null) continue;
-//                String type = cell.getType() != null ? cell.getType().toUpperCase() : "TEXT";
-//
-//                // Text Cells
-//                if ("TEXT".equals(type)) {
-//                    cell.setValue(GlobalParamResolver.resolveValue(cell.getValue(), context));
-//                }
-//
-//                // DB Source Filters
-//                if (cell.getSource() != null) {
-//                    cell.setSource((Map<String, Object>)
-//                            GlobalParamResolver.resolveRecursive(cell.getSource(), context));
-//                }
-//
-//                // Formula Handling
-//                if ("FORMULA".equals(type)) {
-//                    // 1. Resolve Variables Map
-//                    if (cell.getVariables() != null) {
-//                        cell.setVariables((Map<String, Object>)
-//                                GlobalParamResolver.resolveRecursive(cell.getVariables(), context));
-//                    }
-//
-//                    // 2. FIXED: Resolve Expression String (interpolate $G{VAR})
-//                    // This replaces "$G{CURRENT_BALANCE}" with "50000" (or similar value)
-//                    if (cell.getExpression() != null && cell.getExpression().contains("$G{")) {
-//                        Object resolvedExpr = GlobalParamResolver.resolveValue(cell.getExpression(), context);
-//                        cell.setExpression(String.valueOf(resolvedExpr));
-//                    }
-//                }
-//            }
-//        }
-//    }
+    private void applyFiltersToMapIfTableMatches(
+            Map<String, Object> sourceMap,
+            List<ReportTemplate.TemplateColumnFilter> colFilters) {
 
-    /**
-     * Deep resolve all placeholders ($G and #{}) in the template.
-     */
+        String cellTableName = (String) sourceMap.get("table");
+        if (cellTableName == null) return;
+
+        for (ReportTemplate.TemplateColumnFilter cf : colFilters) {
+            if (cf.getTableName().equalsIgnoreCase(cellTableName)) {
+                mergeFiltersIntoSource(sourceMap, cf.getFilters());
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private void resolveTemplateGlobals(ReportTemplate template, Map<String, Object> context) {
-
-        // 1. Resolve Report Extras (Header Metadata)
         if (template.getReportMeta() != null && template.getReportMeta().getExtras() != null) {
             Object resolvedExtras = GlobalParamResolver.resolveRecursive(
-                    template.getReportMeta().getExtras(), context);
+                    template.getReportMeta().getExtras(),
+                    context
+            );
             template.getReportMeta().setExtras((List<Map<String, Object>>) resolvedExtras);
         }
 
         if (template.getReportData().getRows() == null) return;
-
         for (ReportTemplate.Row row : template.getReportData().getRows()) {
-            // 2. Resolve Dynamic Row Config (DB_LIST filters)
             if (row.getDynamicConfig() != null) {
                 row.setDynamicConfig((Map<String, Object>)
                         GlobalParamResolver.resolveRecursive(row.getDynamicConfig(), context));
             }
 
             if (row.getCells() == null) continue;
-
             for (ReportTemplate.Cell cell : row.getCells()) {
                 if (cell == null) continue;
                 String type = cell.getType() != null ? cell.getType().toUpperCase() : "TEXT";
 
-                // 3. Resolve TEXT Cell Values
                 if ("TEXT".equals(type)) {
                     cell.setValue(GlobalParamResolver.resolveValue(cell.getValue(), context));
                 }
 
-                // 4. Resolve DB Source Filters (The Fix for R__18)
                 if (cell.getSource() != null) {
-                    Map<String, Object> resolvedSource = (Map<String, Object>)
-                            GlobalParamResolver.resolveRecursive(cell.getSource(), context);
-                    cell.setSource(resolvedSource);
-
-                    // Debug log to confirm injection
-                    if(log.isTraceEnabled()) {
-                        log.trace("Cell {} source resolved: {}", cell.getId(), resolvedSource);
-                    }
+                    cell.setSource((Map<String, Object>)
+                            GlobalParamResolver.resolveRecursive(cell.getSource(), context));
                 }
 
-                // 5. Formula Handling
                 if ("FORMULA".equals(type)) {
-                    // Resolve Variables Map (Recursive for inline DB_* vars)
                     if (cell.getVariables() != null) {
                         cell.setVariables((Map<String, Object>)
                                 GlobalParamResolver.resolveRecursive(cell.getVariables(), context));
                     }
-
-                    // Resolve Expression String (Interpolate $G{VAR} into numbers/strings)
+//                    if (cell.getExpression() != null && cell.getExpression().contains("$G{")) {
+//                        Object resolvedExpr = GlobalParamResolver.resolveValue(cell.getExpression(), context);
+//                        cell.setExpression(String.valueOf(resolvedExpr));
+//                    }
+                    // 2. FIXED: Safe Interpolation for Formulas
                     if (cell.getExpression() != null && cell.getExpression().contains("$G{")) {
-                        Object resolvedExpr = GlobalParamResolver.resolveValue(cell.getExpression(), context);
-                        cell.setExpression(String.valueOf(resolvedExpr));
+                        // Use custom interpolation that adds quotes to Strings
+                        String newExpr = interpolateFormulaSafe(cell.getExpression(), context);
+                        cell.setExpression(newExpr);
                     }
+
                 }
             }
         }
     }
 
+    private String interpolateFormulaSafe(String expression, Map<String, Object> context) {
+        // Pattern to find $G{VAR}
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\$G\\{([a-zA-Z0-9_]+)\\}");
+        java.util.regex.Matcher m = p.matcher(expression);
 
-    // ==================================================================================
-    // LEGACY VARIANT LOGIC (Unchanged structure, ensuring compatibility)
-    // ==================================================================================
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String key = m.group(1);
+            Object val = context.get(key);
+            String replacement;
+
+            if (val == null) {
+                replacement = "null";
+            } else if (val instanceof Number || val instanceof Boolean) {
+                // Numbers/Booleans injected as-is (Safe)
+                replacement = String.valueOf(val);
+            } else {
+                // Strings: Escape and Wrap in Single Quotes
+                // This turns 05999 into '05999', preventing Octal parsing errors
+                String safeVal = String.valueOf(val).replace("'", "\\'");
+                replacement = "'" + safeVal + "'";
+            }
+
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
 
     public void applyVariantAndParams(ReportTemplate template, ReportVariant variant, Map<String, Object> params) {
         applyVariantRulesInternal(template, variant, params, null);
@@ -290,7 +258,6 @@ public class ReportRuntimeService {
 
         Map<String, String> paramTypes = buildParamTypesMap(variant);
         List<FilterRule> rules = variant.getFilterRules() != null ? variant.getFilterRules() : List.of();
-
         if (template.getReportData().getRows() == null) return;
 
         for (ReportTemplate.Row row : template.getReportData().getRows()) {
@@ -332,7 +299,7 @@ public class ReportRuntimeService {
         }
 
         for (FilterRule r : rules) {
-            if (varyingParamName != null && r.getParamName().equals(varyingParamName)) continue;
+//            if (varyingParamName != null && r.getParamName().equals(varyingParamName)) continue;
             if (!isRuleApplicable(r, table, isDynamicRow)) continue;
 
             Object val = params.get(r.getParamName());
@@ -341,7 +308,6 @@ public class ReportRuntimeService {
             String column = r.getDbColumn();
             String op = r.getOperator() != null ? r.getOperator() : "=";
             String type = paramTypes.getOrDefault(r.getParamName(), "STRING");
-
             Map<String, Object> newCondition = new HashMap<>();
             newCondition.put("op", op);
             newCondition.put("value", val);
@@ -360,7 +326,8 @@ public class ReportRuntimeService {
     }
 
     @SuppressWarnings("unchecked")
-    private void mergeFiltersIntoSource(Map<String, Object> source, List<Map<String, Object>> colFilters) {
+    private void mergeFiltersIntoSource(Map<String, Object> source, Map<String, Object> newFilters) {
+        if (newFilters == null || newFilters.isEmpty()) return;
         Map<String, Object> existingFilters;
         if (source.get("filters") instanceof Map) {
             existingFilters = new HashMap<>((Map<String, Object>) source.get("filters"));
@@ -368,21 +335,25 @@ public class ReportRuntimeService {
             existingFilters = new HashMap<>();
         }
 
-        for (Map<String, Object> colFilter : colFilters) {
-            String dbCol = (String) colFilter.get("dbColumn");
-            if (dbCol == null) continue;
+        for (Map.Entry<String, Object> entry : newFilters.entrySet()) {
+            String dbCol = entry.getKey();
+            Object newConditions = entry.getValue();
+            Object existingConditions = existingFilters.get(dbCol);
+            List<Object> mergedList = new ArrayList<>();
 
-            Map<String, Object> newFilter = new HashMap<>(colFilter);
-            newFilter.remove("dbColumn");
+            if (existingConditions instanceof List) {
+                mergedList.addAll((List<Object>) existingConditions);
+            } else if (existingConditions != null) {
+                mergedList.add(existingConditions);
+            }
 
-            Object existing = existingFilters.get(dbCol);
-            List<Object> conditionList = new ArrayList<>();
+            if (newConditions instanceof List) {
+                mergedList.addAll((List<Object>) newConditions);
+            } else if (newConditions != null) {
+                mergedList.add(newConditions);
+            }
 
-            if (existing instanceof List) conditionList.addAll((List<Object>) existing);
-            else if (existing instanceof Map) conditionList.add(existing);
-
-            conditionList.add(newFilter);
-            existingFilters.put(dbCol, conditionList);
+            existingFilters.put(dbCol, mergedList);
         }
         source.put("filters", existingFilters);
     }
@@ -400,9 +371,10 @@ public class ReportRuntimeService {
     private boolean isRuleApplicable(FilterRule r, String table, boolean dynamicRow) {
         String st = r.getScopeType() == null ? "ALL_DB" : r.getScopeType().toUpperCase(Locale.ROOT);
         String sv = r.getScopeValue();
+//        log.info("scope and value ::: {} {}", st, sv);
         return switch (st) {
             case "ALL_DB" -> true;
-            case "TABLE" -> table != null && sv != null && table.equalsIgnoreCase(sv);
+            case "TABLE" -> table != null && table.equalsIgnoreCase(sv);
             case "DYNAMIC_TABLE" -> dynamicRow && table != null && table.equalsIgnoreCase(sv);
             default -> false;
         };

@@ -9,6 +9,7 @@ import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec.Type;
 import com.tcs.fincore.ReportBuilder.util.FilterSqlBuilder;
+import com.tcs.fincore.ReportBuilder.util.GlobalParamResolver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -355,6 +356,56 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                         "Invalid characters in ORDER BY column: " + column);
             }
         }
+    }
+
+    /**
+     * Extracts DB Specs from Global Parameters (Mode = QUERY).
+     * Applies static context (e.g., resolved dates) to filters before extraction.
+     */
+    @Override
+    public List<DataSourceSpec> extractGlobalParamSpecs(ReportTemplate t, Map<String, Object> staticContext) {
+        List<DataSourceSpec> out = new ArrayList<>();
+        if (t.getGlobalParams() == null) return out;
+
+        for (ReportTemplate.GlobalParamDef def : t.getGlobalParams()) {
+            if (def.getMode() != ReportTemplate.ParamMode.QUERY || def.getSource() == null) {
+                continue;
+            }
+
+            try {
+                // 1. Resolve Static Dependencies in Filters (e.g. $G{REPORT_DATE} -> '2025-01-01')
+                // We do NOT fail on missing deps here because the Varying Dimension (e.g. $G{BRANCH_CODE})
+                // will be missing (or set to placeholder) in staticContext.
+                Map<String, Object> resolvedSource = (Map<String, Object>)
+                        GlobalParamResolver.resolveRecursive(def.getSource(), staticContext);
+
+                // 2. Extract Fields
+                String table = (String) resolvedSource.get("table");
+                String column = (String) resolvedSource.get("column");
+                String typeStr = (String) resolvedSource.get("type");
+
+                if (table == null || column == null || typeStr == null) {
+                    log.warn("Skipping invalid Global Param Query def: {}", def.getName());
+                    continue;
+                }
+
+                // 3. Build Spec
+                // SpecID format: "GLOBAL::{ParamName}"
+                out.add(new DataSourceSpec(
+                        "GLOBAL::" + def.getName(),
+                        DataSourceSpec.Type.valueOf(typeStr.toUpperCase()),
+                        table,
+                        column,
+                        safeMap(resolvedSource.get("filters")),
+                        "GlobalParam:" + def.getName()
+                ));
+
+            } catch (Exception e) {
+                log.error("Failed to extract spec for Global Param '{}': {}", def.getName(), e.getMessage());
+                // Don't crash entire batch analysis for one bad param, but log it.
+            }
+        }
+        return out;
     }
 
     @SuppressWarnings("unchecked")

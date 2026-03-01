@@ -6,6 +6,7 @@ import com.tcs.fincore.ReportBuilder.model.variant.VariantParamDef;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 
 public final class ReportFileNameUtil {
@@ -83,7 +84,8 @@ public final class ReportFileNameUtil {
                 return new java.sql.Date(d.getTime()).toLocalDate();
             if (v instanceof String s)
                 return LocalDate.parse(s); // ISO yyyy-MM-dd
-        } catch (Exception ignored) {
+        } catch (DateTimeParseException ignored) {
+
         }
         return null;
     }

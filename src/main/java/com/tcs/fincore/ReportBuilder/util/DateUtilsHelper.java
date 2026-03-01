@@ -2,7 +2,9 @@ package com.tcs.fincore.ReportBuilder.util;
 
 import lombok.extern.slf4j.Slf4j;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 
 /**
@@ -27,7 +29,7 @@ public class DateUtilsHelper {
     public LocalDate addMonths(Object dateObj, int months) {
 
         LocalDate date = parse(dateObj);
-        log.info("inside addMonths :: {} :: {} :: {}", date, months, date.plusMonths(months));
+        log.debug("inside addMonths :: {} :: {} :: {}", date, months, date.plusMonths(months));
 
         return date != null ? date.plusMonths(months) : null;
     }
@@ -57,6 +59,27 @@ public class DateUtilsHelper {
     }
 
     /**
+     * NEW: Get current system date.
+     * Usage: #{DateUtils.today()}
+     */
+    public LocalDate today() {
+        return LocalDate.now();
+    }
+
+    /**
+     * NEW: Get current system timestamp formatted as a String.
+     * Usage: #{DateUtils.now('dd-MMM-yyyy HH:mm')}
+     */
+    public String now(String formatPattern) {
+        try {
+            return LocalDateTime.now().format(DateTimeFormatter.ofPattern(formatPattern));
+        } catch (DateTimeParseException e) {
+            log.error("Invalid date format pattern: {}", formatPattern);
+            return LocalDateTime.now().toString();
+        }
+    }
+
+    /**
      * Safe parsing that handles both String (ISO) and LocalDate inputs.
      */
     private LocalDate parse(Object obj) {
@@ -69,7 +92,7 @@ public class DateUtilsHelper {
             try {
                 // Try ISO format first
                 return LocalDate.parse(s);
-            } catch (Exception e) {
+            } catch (DateTimeParseException e) {
                 log.warn("DateUtils: Failed to parse date string '{}'", s);
                 return null;
             }

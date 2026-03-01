@@ -1,5 +1,14 @@
+
+
+
+
+// MODIFIED: Added executionContext field to carry trigger source and correlation IDs.
+// All existing fields and their behaviour are unchanged.
+
 package com.tcs.fincore.ReportBuilder.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -7,9 +16,6 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Request DTO for submitting batch report generation jobs
- */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -33,6 +39,18 @@ public class BatchJobRequest {
     // Output settings
     private List<String> outputFormats;  // ["pdf", "xlsx", "txt"]
     private String hdfsBasePath;         // Optional: override default HDFS path
+
+    /**
+     * Execution context carrying trigger-source and upstream correlation IDs.
+     *
+     * <p>This field is intentionally excluded from JSON serialization:
+     * <ul>
+     *   <li>REST callers never set it — their jobs use {@link ReportExecutionContext#fromRest()}.</li>
+     *   <li>Kafka consumer sets it before calling the orchestrator.</li>
+     * </ul>
+     */
+    @JsonIgnore
+    private ReportExecutionContext executionContext;
 
     @Data
     @NoArgsConstructor

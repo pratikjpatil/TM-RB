@@ -27,6 +27,11 @@ public interface TemplateProcessorService {
     void expandDynamicRows(ReportTemplate template);
 
     /**
+     * Extract specs from Global Parameters (Mode=QUERY)
+     */
+    List<DataSourceSpec> extractGlobalParamSpecs(ReportTemplate t, Map<String, Object> staticContext);
+
+    /**
      * Convert template + computed cell values to ExportModel.
      */
     ExportModel toExportModel(ReportTemplate template, Map<String, Object> computedValues);

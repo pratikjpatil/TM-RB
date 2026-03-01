@@ -1,13 +1,13 @@
-
 package com.tcs.fincore.ReportBuilder.batch.analyzer;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.exception.ReportProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.model.variant.ReportVariant;
 import com.tcs.fincore.ReportBuilder.model.variant.VariantParamDef;
-import com.tcs.fincore.ReportBuilder.model.variant.FilterRule; // Added Import
+import com.tcs.fincore.ReportBuilder.model.variant.FilterRule;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,12 +15,14 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * FIXED: Advanced pattern analysis supporting Multiple Operators per column (List-based filters)
- * UPDATED: Resolves column names from Variant Rules instead of inferring them.
+ * FIXED: Advanced pattern analysis supporting Multiple Operators and Automatic Global Param detection.
  */
 @Slf4j
 @Component
 public class QueryPatternAnalyzer {
+
+    // MUST match the placeholder injected by ReportRuntimeService.applyBatchParams
+    public static final String BATCH_VAR_PLACEHOLDER = "BATCH_VAR_PLACEHOLDER";
 
     /**
      * Analyze template and extract optimizable query patterns
@@ -36,13 +38,11 @@ public class QueryPatternAnalyzer {
 
         // Group specs by their COMPLETE logical pattern (including all operators and constraints)
         Map<String, List<DataSourceSpec>> groupedSpecs = groupSpecsByPattern(allSpecs);
-
         log.debug("Grouped {} specs into {} unique patterns",
                 allSpecs.size(), groupedSpecs.size());
 
         // Build QueryPattern objects
         List<QueryPattern> patterns = new ArrayList<>();
-
         for (Map.Entry<String, List<DataSourceSpec>> entry : groupedSpecs.entrySet()) {
             try {
                 QueryPattern pattern = buildQueryPattern(
@@ -50,23 +50,30 @@ public class QueryPatternAnalyzer {
                         batchRequest,
                         variant
                 );
-
                 if (pattern != null) {
                     patterns.add(pattern);
-                    log.debug("Pattern {}: table={}, column={}, agg={}, batchable={}, specs={}, static_filters={}, bulk_filters={}, conditional_filters={}",
+                    log.debug("Pattern {}: table={}, column={}, agg={}, batchable={}, varyingCol={}",
                             pattern.getPatternId(),
                             pattern.getTable(),
                             pattern.getColumn(),
                             pattern.getAggregationType(),
                             pattern.isBatchable(),
-                            pattern.getSourceSpecIds().size(),
-                            pattern.getStaticFilters().size(),
-                            pattern.getBulkFilters() != null ? pattern.getBulkFilters().size() : 0,
-                            pattern.getConditionalFilters() != null ? pattern.getConditionalFilters().size() : 0);
+                            pattern.getVaryingDimension() != null ? pattern.getVaryingDimension().getColumnName() : "NONE");
                 }
+            } catch (ValidationException e) {
+                // Expected — bad config in template, log and skip this pattern
+                log.warn("Skipping pattern group '{}' due to validation error: {}",
+                        entry.getKey(), e.getMessage());
+            } catch (ReportProcessingException e) {
+                // Serious but isolated — log full stack, continue with other patterns
+                log.error("Processing error for pattern group '{}': {}", entry.getKey(), e.getMessage(), e);
             } catch (Exception e) {
-//                log.warn("Failed to build pattern for group {}: {}", entry.getKey(), e.getMessage());
-                throw new ValidationException("Failed to build pattern for group :"+ entry.getKey() + " error :: " +e.getMessage());
+                // Truly unexpected — log with full context for debugging
+                log.error("Unexpected error building pattern for group '{}'. PatternKey={}, ErrorType={}",
+                        entry.getKey(), entry.getKey(), e.getClass().getName(), e);
+                // Do NOT silently swallow — rethrow as domain exception
+                throw new ReportProcessingException(
+                        "Unexpected failure during pattern analysis for group: " + entry.getKey(), e);
             }
         }
 
@@ -83,7 +90,6 @@ public class QueryPatternAnalyzer {
 
     /**
      * Generate logical key that INCLUDES operator types and sorts them for determinism.
-     * Supports both Map (legacy) and List (multi-op) filter structures.
      */
     private String getSpecLogicalKey(DataSourceSpec spec) {
         StringBuilder sb = new StringBuilder();
@@ -103,30 +109,24 @@ public class QueryPatternAnalyzer {
                         // Normalize everything to a List of Constraints for key generation
                         List<Map<String, Object>> constraints = normalizeConstraints(filterValue);
 
-                        // Sort constraints by OP and DataType to ensure [{op:>, val:A}, {op:<, val:B}] == [{op:<, val:B}, {op:>, val:A}]
+                        // Sort constraints by OP and DataType
                         constraints.sort(Comparator.comparing(m -> String.valueOf(m.get("op")) + m.get("dataType")));
 
                         for (Map<String, Object> fm : constraints) {
                             String op = String.valueOf(fm.get("op")).toUpperCase();
                             String dataType = String.valueOf(fm.getOrDefault("dataType", "STRING"));
+                            Object val = fm.get("value");
 
                             sb.append(op).append(":").append(dataType);
 
-                            // Include value in key for equality/range checks (Static)
-                            // Exclude value for IN/BETWEEN if they are meant to be batched
-                            // Current logic: strict grouping. If values differ, it's a different group unless we handle it later.
-                            // For QueryPatternAnalyzer, we group EXACT matches first.
-                            // *However*, for Batching to work, 'IN' clauses that vary should ideally map to the same pattern IF they are the bulk filter.
-                            // But keeping strict keys is safer; the 'buildQueryPattern' logic merges if possible,
-                            // or we rely on the fact that batch varying params are usually handled via getVaryingDimension separately.
-                            // For IN clauses, we mark as IN_LIST so they group together even if values differ
-                            if ("IN".equals(op)) {
-                                sb.append(":IN_LIST");
+                            // CRITICAL: Treat the Batch Placeholder as a generic "VAR" for grouping.
+                            // This ensures queries that differ only by the placeholder value (though rare in analysis phase) group together.
+                            if (BATCH_VAR_PLACEHOLDER.equals(val) || "IN".equals(op)) {
+                                sb.append(":VAR");
                             } else {
-                                sb.append(":").append(fm.get("value"));
+                                sb.append(":").append(val);
                             }
                             sb.append("#");
-                            // Separator between constraints
                         }
                         sb.append(";");
                     });
@@ -168,12 +168,10 @@ public class QueryPatternAnalyzer {
             BatchJobRequest batchRequest,
             ReportVariant variant) {
 
-        if (specs == null || specs.isEmpty()) {
-            return null;
-        }
+        if (specs == null || specs.isEmpty()) return null;
+//        log.info("specs testing :: {}", specs);
 
         DataSourceSpec first = specs.get(0);
-
         QueryPattern pattern = QueryPattern.builder()
                 .patternId(UUID.randomUUID().toString().substring(0, 8))
                 .table(first.getTable())
@@ -188,39 +186,45 @@ public class QueryPatternAnalyzer {
         // Collect all spec IDs
         specs.forEach(s -> pattern.getSourceSpecIds().add(s.getSpecId()));
 
-        // Extract varying dimension
+        // --- FIXED: Automatic Column Detection for Varying Dimension ---
         if (batchRequest.getVaryingDimension() != null) {
             String paramName = batchRequest.getVaryingDimension().getParamName();
+            String foundDbColumn = null;
 
-            // FIXED: Resolve DB Column from Variant Rules instead of inferring regex
-            String columnName = resolveDbColumn(variant, paramName);
+            // Strategy 1: Look for Explicit Usage in Filters (Primary Strategy)
+            // We check if any filter in the spec has the value "BATCH_VAR_PLACEHOLDER"
+            if (first.getFilters() != null) {
+                for (Map.Entry<String, Object> entry : first.getFilters().entrySet()) {
+                    if (containsPlaceholder(entry.getValue())) {
+                        foundDbColumn = entry.getKey();
+                        log.debug("Found explicit varying column via Global Param: {}", foundDbColumn);
+                        break;
+                    }
+                }
+            }
 
-            // Fallback to inference only if not found in rules
-            if (columnName == null) {
-//                log.warn("Varying param '{}' not found in variant rules. Falling back to inference.", paramName);
-//                columnName = inferColumnName(paramName);
-//                throw new ValidationException("DB Column Not Found for the provided varying dimension.");
-                log.warn("DB Column Not Found for the provided varying dimension., {}", paramName);
+            // Strategy 2: Fallback to Variant Rules (Legacy/Implicit Strategy)
+            if (foundDbColumn == null) {
+                foundDbColumn = resolveDbColumnFromVariant(variant, paramName, first.getTable());
+                if (foundDbColumn != null) {
+                    log.debug("Found implicit varying column via Variant Rule: {}", foundDbColumn);
+                }
+            }
+
+            if (foundDbColumn != null) {
+                String paramType = getParamType(variant, paramName);
+                QueryPattern.DynamicFilter dynFilter = QueryPattern.DynamicFilter.builder()
+                        .columnName(foundDbColumn)
+                        .paramName(paramName)
+                        .allValues(new HashSet<>(batchRequest.getVaryingDimension().getValues()))
+                        .dataType(paramType)
+                        .build();
+                pattern.setVaryingDimension(dynFilter);
+            } else {
+                // If we can't find the column, this pattern is NOT batchable on this dimension.
+                // It might be a static global query (like fetching Bank Name).
                 pattern.setVaryingDimension(null);
-                return pattern;
             }
-
-            String paramType = "STRING";
-            if (variant != null && variant.getParams() != null) {
-                paramType = variant.getParams().stream()
-                        .filter(p -> p.getParamName().equals(paramName))
-                        .findFirst()
-                        .map(VariantParamDef::getParamType)
-                        .orElse("STRING");
-            }
-
-            QueryPattern.DynamicFilter dynFilter = QueryPattern.DynamicFilter.builder()
-                    .columnName(columnName)
-                    .paramName(paramName)
-                    .allValues(new HashSet<>(batchRequest.getVaryingDimension().getValues()))
-                    .dataType(paramType)
-                    .build();
-            pattern.setVaryingDimension(dynFilter);
         }
 
         // Analyze filters across all specs in the group
@@ -228,26 +232,51 @@ public class QueryPatternAnalyzer {
         return pattern;
     }
 
-    /**
-     * Logic to categorize filters into Static (Shared), Bulk (Union), or Conditional
-     */
+    private boolean containsPlaceholder(Object filterValue) {
+        List<Map<String, Object>> constraints = normalizeConstraints(filterValue);
+        for (Map<String, Object> c : constraints) {
+            Object val = c.get("value");
+            if (BATCH_VAR_PLACEHOLDER.equals(val)) return true;
+        }
+        return false;
+    }
+
+
+
+    // -------------------------------------------------------------------------
+    // FIX #12: Iterate the UNION of filter keys from ALL specs, not just spec[0].
+    //          If spec[0] has null filters, we no longer return early and miss data.
+    // -------------------------------------------------------------------------
+
     private void analyzeFiltersAcrossSpecs(List<DataSourceSpec> specs, QueryPattern pattern) {
-        String varyingColumn = pattern.getVaryingDimension() != null ?
-                pattern.getVaryingDimension().getColumnName() : null;
+        String varyingColumn = pattern.getVaryingDimension() != null
+                ? pattern.getVaryingDimension().getColumnName() : null;
 
-        // We use the first spec as the "template" for structure, since grouping key ensures structure identity
-        DataSourceSpec representative = specs.get(0);
-        if (representative.getFilters() == null) return;
+        // Build the union of all filter-column names across all specs in the group.
+        Set<String> allFilterColumns = new LinkedHashSet<>();
+        for (DataSourceSpec spec : specs) {
+            if (spec.getFilters() != null) {
+                allFilterColumns.addAll(spec.getFilters().keySet());
+            }
+        }
 
-        for (String column : representative.getFilters().keySet()) {
-            // Skip varying dimension (handled separately)
+        if (allFilterColumns.isEmpty()) return;
+
+        // Use the first spec that actually has filters as the representative.
+        DataSourceSpec representative = specs.stream()
+                .filter(s -> s.getFilters() != null && !s.getFilters().isEmpty())
+                .findFirst()
+                .orElse(null);
+
+        if (representative == null) return;
+
+        for (String column : allFilterColumns) {
             if (column.equals(varyingColumn)) continue;
 
-            // Normalize constraints for this column from the representative
-            List<Map<String, Object>> repConstraints = normalizeConstraints(representative.getFilters().get(column));
+            Object repFilterValue = representative.getFilters().get(column);
+            if (repFilterValue == null) continue;
 
-            // For each constraint on this column, we must decide if it's Static or Bulk
-            // We assume order/structure is preserved due to grouping key logic
+            List<Map<String, Object>> repConstraints = normalizeConstraints(repFilterValue);
             for (int i = 0; i < repConstraints.size(); i++) {
                 Map<String, Object> repConst = repConstraints.get(i);
                 categorizeConstraint(column, i, repConst, specs, pattern);
@@ -255,65 +284,66 @@ public class QueryPatternAnalyzer {
         }
     }
 
-    @SuppressWarnings("unchecked")
+
+
+
+
+
+
+    // -------------------------------------------------------------------------
+    // FIX #3: When op is promoted from "=" or "!=" to "IN" because value is a
+    //         Collection, we create a *new* constraint map with the corrected op
+    //         so downstream code (FilterSqlBuilder) never sees op="=" with a list value.
+    // -------------------------------------------------------------------------
+
     private void categorizeConstraint(String column, int constraintIndex,
                                       Map<String, Object> repConst,
                                       List<DataSourceSpec> specs,
                                       QueryPattern pattern) {
 
         String op = String.valueOf(repConst.get("op")).toUpperCase();
-        String dataType = String.valueOf(repConst.getOrDefault("dataType", "STRING"));
         Object repValue = repConst.get("value");
+
+        // Promote "=" / "!=" to "IN" when the value is already a Collection.
+        // We work on a COPY so the original spec data is not mutated.
+        Map<String, Object> effectiveConst = repConst;
+        if (("=".equals(op) || "!=".equals(op)) && repValue instanceof Collection) {
+            op = "IN";
+            effectiveConst = new HashMap<>(repConst);
+            effectiveConst.put("op", "IN");
+        }
 
         switch (op) {
             case "IN" -> {
-                // BULK FILTER CANDIDATE: Collect values from this specific constraint across all specs
                 Set<Object> allValues = new HashSet<>();
                 for (DataSourceSpec spec : specs) {
-                    List<Map<String, Object>> specConstraints = normalizeConstraints(spec.getFilters().get(column));
+                    if (spec.getFilters() == null) continue;
+                    List<Map<String, Object>> specConstraints =
+                            normalizeConstraints(spec.getFilters().get(column));
                     if (constraintIndex < specConstraints.size()) {
                         Object val = specConstraints.get(constraintIndex).get("value");
-                        if (val instanceof Collection) {
-                            allValues.addAll((Collection<?>) val);
+                        if (val instanceof Collection<?> c) {
+                            allValues.addAll(c);
                         } else if (val != null) {
                             allValues.add(val);
                         }
                     }
                 }
-
                 if (!allValues.isEmpty()) {
-                    // We merge into bulkFilters map.
-                    // NOTE: If multiple IN clauses exist on same column, they merge into one set of keys for fetching.
-                    // This assumes "Union" semantics for fetching, enabling us to get all potential rows.
                     pattern.getBulkFilters().merge(column, allValues, (a, b) -> {
                         Set<Object> merged = new HashSet<>(a);
                         merged.addAll(b);
                         return merged;
                     });
-                    log.debug("Bulk filter (merged): {} size={}", column, pattern.getBulkFilters().get(column).size());
                 }
             }
-
-            case "=", "!=", "LIKE" -> {
-                // STATIC FILTER CANDIDATE: Must be identical across all specs
-                // Grouping key logic actually guarantees this for =, !=, LIKE if we included value in key.
-                // But let's be safe and add to static filters.
-                // If staticFilters already has a list for this column, append. Else create list.
-                // We store the full constraint map to support multiple static filters per column.
-                addToStaticFilters(pattern, column, repConst);
-            }
-
-            case ">", "<", ">=", "<=", "BETWEEN" -> {
-                // CONDITIONAL or STATIC depending on variance.
-                // For batch optimizations, we treat Ranges as "Static" constraints on the batch query
-                // (assuming the range itself doesn't vary per report, which grouping key ensures).
-                // If ranges DID vary, we couldn't batch easily without fetching Min(Start)..Max(End).
-                // Current Strategy: Add as Static Filter (passed through to SQL).
-                // This allows > 2023 AND < 2026 to be applied to the batch query.
-                addToStaticFilters(pattern, column, repConst);
-            }
+            case "=", "!=", "LIKE" -> addToStaticFilters(pattern, column, effectiveConst);
+            case ">", "<", ">=", "<=", "BETWEEN" -> addToStaticFilters(pattern, column, effectiveConst);
+            default -> log.warn("Unrecognised filter operator '{}' for column '{}' — skipping", op, column);
         }
     }
+
+
 
     @SuppressWarnings("unchecked")
     private void addToStaticFilters(QueryPattern pattern, String column, Map<String, Object> constraint) {
@@ -326,7 +356,6 @@ public class QueryPatternAnalyzer {
         } else if (existing instanceof List) {
             list = (List<Map<String, Object>>) existing;
         } else {
-            // Should not happen with new logic, but handle legacy migration
             list = new ArrayList<>();
             if (existing instanceof Map) list.add((Map<String, Object>) existing);
             pattern.getStaticFilters().put(column, list);
@@ -342,41 +371,47 @@ public class QueryPatternAnalyzer {
             case DB_AVG -> "AVG";
             case DB_MIN -> "MIN";
             case DB_MAX -> "MAX";
-            case DB_VALUE, DB_TEXT, DB_DATE -> "VALUE";
+            default -> "VALUE";
         };
     }
 
-    /**
-     * Looks up the DB column from the variant's filter rules.
-     */
-    private String resolveDbColumn(ReportVariant variant, String paramName) {
-//        log.info("ParamName:: {}, variant:: {}", paramName, variant);
-        if (variant == null || variant.getFilterRules() == null) {
-            return null;
-        }
+    private String resolveDbColumnFromVariant(ReportVariant variant, String paramName, String currentTable) {
+        if (variant == null || variant.getFilterRules() == null) return null;
         return variant.getFilterRules().stream()
                 .filter(rule -> paramName.equals(rule.getParamName()))
+                .filter(rule->isRuleApplicable(rule, currentTable, false))
                 .findFirst()
                 .map(FilterRule::getDbColumn)
                 .orElse(null);
     }
 
-    private String inferColumnName(String paramName) {
-        return paramName.replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase();
+    private boolean isRuleApplicable(FilterRule r, String table, boolean dynamicRow) {
+        String st = r.getScopeType() == null ? "ALL_DB" : r.getScopeType().toUpperCase(Locale.ROOT);
+        String sv = r.getScopeValue();
+        return switch (st) {
+            case "ALL_DB" -> true;
+            case "TABLE" -> table != null && table.equalsIgnoreCase(sv);
+            case "DYNAMIC_TABLE" -> dynamicRow && table != null && table.equalsIgnoreCase(sv);
+            default -> false;
+        };
+    }
+
+    private String getParamType(ReportVariant variant, String paramName) {
+        if (variant != null && variant.getParams() != null) {
+            return variant.getParams().stream()
+                    .filter(p -> p.getParamName().equals(paramName))
+                    .findFirst()
+                    .map(VariantParamDef::getParamType)
+                    .orElse("STRING");
+        }
+        return "STRING";
     }
 
     public boolean shouldUseBatchMode(BatchJobRequest request, List<QueryPattern> patterns) {
         if (request.getVaryingDimension() == null) return false;
         long batchablePatterns = patterns.stream().filter(QueryPattern::isBatchable).count();
-//        if (batchablePatterns == 0) return false;
-        long totalSpecs = patterns.stream().mapToLong(p -> p.getSourceSpecIds().size()).sum();
-        long totalReports = request.getVaryingDimension().getValues().size();
-        long estimatedSequentialQueries = totalSpecs * totalReports;
-        long estimatedBatchQueries = batchablePatterns;
-        double reduction = 1.0 - ((double) estimatedBatchQueries / estimatedSequentialQueries);
-
-        log.info("Batch analysis: {} patterns, {} batchable. Est reduction: {}%", patterns.size(), batchablePatterns, reduction * 100);
-//        return reduction > 0.50;
+        // Return true if at least one pattern is batchable
+//        return batchablePatterns > 0;
         return true;
     }
 }

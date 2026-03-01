@@ -79,9 +79,21 @@ public class ReportTemplate {
         private String name;
         private Map<String, Object> format;
 
-        // NEW: Column-level filters
-        // These are broadcast to every DB cell in this column during runtime
-        private List<Map<String, Object>> filters;
+        // NEW: Support for the JSON structure provided
+        // "templateColumnFilters": [ { "tableName": "...", "filters": {...} } ]
+        @JsonProperty("templateColumnFilters")
+        private List<TemplateColumnFilter> templateColumnFilters;
+    }
+
+    /**
+     * NEW: Inner class to map the specific filter structure
+     */
+    @Data
+    public static class TemplateColumnFilter {
+        private String tableName;
+
+        // Maps Column Name -> List of Conditions (e.g., "BALANCE": [{op:">", value:"0"}])
+        private Map<String, Object> filters;
     }
 
     @Data

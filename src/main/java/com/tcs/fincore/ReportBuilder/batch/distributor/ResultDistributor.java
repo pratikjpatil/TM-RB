@@ -1,15 +1,16 @@
 
 
+
 package com.tcs.fincore.ReportBuilder.batch.distributor;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
+import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -17,12 +18,31 @@ public class ResultDistributor {
 
     private Map<String, Map<String, Map<String, Object>>> batchResults;
     private Map<String, QueryPattern> specToPatternMap;
+    private Map<String, Map<String, Object>> preFetchedGlobals;
+    private Map<String, String> columnToGlobalMap;
 
     public void initialize(
             Map<String, Map<String, Map<String, Object>>> batchResults,
-            List<QueryPattern> patterns) {
+            List<QueryPattern> patterns,
+            Map<String, Map<String, Object>> preFetchedGlobals,
+            ReportTemplate template
+    ) {
         this.batchResults = batchResults;
         this.specToPatternMap = buildSpecToPatternMap(patterns);
+        this.preFetchedGlobals = preFetchedGlobals;
+        this.columnToGlobalMap = buildColumnMap(template);
+    }
+
+    private Map<String, String> buildColumnMap(ReportTemplate template) {
+        Map<String, String> map = new HashMap<>();
+        if (template.getGlobalParams() != null) {
+            for (ReportTemplate.GlobalParamDef def : template.getGlobalParams()) {
+                if (def.getMode() == ReportTemplate.ParamMode.QUERY && def.getSource() != null) {
+                    map.put(def.getSource().getColumn(), def.getName());
+                }
+            }
+        }
+        return map;
     }
 
     public Map<String, Object> getResultsForDimension(String dimensionValue, List<DataSourceSpec> specs) {
@@ -35,7 +55,15 @@ public class ResultDistributor {
                 if (val != null && !"FALLBACK".equals(val)) {
                     results.put(spec.getSpecId(), val);
                 } else {
-                    results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
+                    // Logic for fallback: If explicitly FALLBACK, we skip putting it here so AggregatorService handles it.
+                    // However, if we want to force 0.00 instead of fallback for batch misses:
+                    if ("FALLBACK".equals(val)) {
+                        // Mark for fallback or return default based on strictness policy.
+                        // Returning "FALLBACK" string allows orchestrator to query individually.
+                        results.put(spec.getSpecId(), "FALLBACK");
+                    } else {
+                        results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
+                    }
                 }
             } catch (Exception e) {
                 log.error("Distributor error for spec {}: {}", spec.getSpecId(), e.getMessage());
@@ -49,64 +77,137 @@ public class ResultDistributor {
         QueryPattern pattern = specToPatternMap.get(spec.getSpecId());
         if (pattern == null) return "FALLBACK";
 
+        if (!batchResults.containsKey(pattern.getPatternId())) return "FALLBACK";
         Map<String, Map<String, Object>> patternData = batchResults.get(pattern.getPatternId());
-        if (patternData == null) return "FALLBACK";
 
-        Map<String, Object> dimensionData = patternData.get(dimensionValue);
-        if (dimensionData == null) return getDefaultValue(spec.getType());
+        // 1. Try Specific Dimension (e.g. Branch Code)
+        Map<String, Object> data = patternData.get(dimensionValue);
+        // 2. Try DEFAULT (for non-varying patterns)
+        if (data == null) data = patternData.get("DEFAULT");
 
-        List<String> bulkKeys = extractBulkKeysFromSpec(spec, pattern);
-        if (bulkKeys.isEmpty()) {
-            Object value = dimensionData.get("DEFAULT");
-            return value != null ? value : getDefaultValue(spec.getType());
-        }
-        return aggregateValues(dimensionData, bulkKeys, spec.getType());
+        if (data == null) return getDefaultValue(spec.getType());
+
+        // 3. Resolve Keys (FIXED: Supports Multiple Keys and Composite Keys)
+        List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern);
+
+        // 4. Aggregate values for all matched keys
+        return aggregateValues(data, bulkKeys, spec.getType());
     }
 
     /**
-     * FIXED: Extract keys from potentially nested List/Map structures in filters
+     * FIXED: Returns a LIST of keys to look up.
+     * Handles Indirection (Global Params) and Standard Bulk Filters.
      */
-    @SuppressWarnings("unchecked")
+    private List<String> resolveBulkKeys(DataSourceSpec spec, String dimensionValue, QueryPattern pattern) {
+        // A. check if this column is driven by a Global Param (Indirection)
+        String globalParamName = columnToGlobalMap.get(spec.getColumn());
+        if (globalParamName != null && preFetchedGlobals != null) {
+            Map<String, Object> globalValues = preFetchedGlobals.get(globalParamName);
+            if (globalValues != null && globalValues.containsKey(dimensionValue)) {
+                return Collections.singletonList(String.valueOf(globalValues.get(dimensionValue)));
+            }
+        }
+
+        // B. Standard Bulk Filter Logic (Direct Mapping with Cartesian Product)
+        return extractBulkKeysFromSpec(spec, pattern);
+    }
+
+    /**
+     * FIXED: Generates keys matching the Materializer's format.
+     * 1. Matches "SingleColumnValue" if only 1 bulk column.
+     * 2. Matches "Val1:Val2" if multiple bulk columns.
+     * 3. Generates Cartesian product if filters contain IN clauses.
+     */
     private List<String> extractBulkKeysFromSpec(DataSourceSpec spec, QueryPattern pattern) {
-        if (pattern.getBulkFilters() == null || pattern.getBulkFilters().isEmpty()) return Collections.emptyList();
-        if (spec.getFilters() == null) return Collections.emptyList();
+        if (pattern.getBulkFilters() == null || pattern.getBulkFilters().isEmpty()) {
+            return Collections.singletonList("DEFAULT");
+        }
 
-        List<String> allKeys = new ArrayList<>();
+        // 1. Identify Bulk Columns and Sort them (Must match Materializer sorting)
+        List<String> sortedCols = new ArrayList<>(pattern.getBulkFilters().keySet());
+        Collections.sort(sortedCols);
 
-        for (String bulkColumn : pattern.getBulkFilters().keySet()) {
-            Object filterValue = spec.getFilters().get(bulkColumn);
-            if (filterValue == null) continue;
+        // 2. Extract values for each column from the Spec
+        List<List<String>> columnsValues = new ArrayList<>();
 
-            // Normalize to List to handle both Map and List of Maps
-            List<Object> constraints = new ArrayList<>();
-            if (filterValue instanceof List) {
-                constraints.addAll((List<?>) filterValue);
+        for (String col : sortedCols) {
+            Object filterVal = spec.getFilters() != null ? spec.getFilters().get(col) : null;
+            List<String> valuesForCol = new ArrayList<>();
+
+            if (filterVal == null) {
+                // If spec has no filter for a bulk column, it technically implies "ALL"
+                // but in our grouping logic, specs without filters shouldn't group with specs with filters
+                // unless strictly handled. Assuming NULL/Missing matches "NULL" string from DB or nothing.
+                // However, usually specs in the same pattern share the filter structure.
+                // We will treat it as "NULL" to match Materializer's behavior for missing data.
+                valuesForCol.add("NULL");
             } else {
-                constraints.add(filterValue);
+                List<Map<String, Object>> constraints = normalizeConstraints(filterVal);
+                for (Map<String, Object> c : constraints) {
+                    Object val = c.get("value");
+                    String op = String.valueOf(c.get("op")).toUpperCase();
+
+                    if ("IN".equals(op) && val instanceof Collection<?> list) {
+                        for (Object v : list) valuesForCol.add(String.valueOf(v));
+                    } else if (val != null) {
+                        valuesForCol.add(String.valueOf(val));
+                    }
+                }
             }
 
-            // Iterate constraints to find the IN clause (or Equality) used for Bulk selection
-            for (Object constraint : constraints) {
-                if (constraint instanceof Map) {
-                    Map<String, Object> fm = (Map<String, Object>) constraint;
-                    String op = String.valueOf(fm.get("op")).toUpperCase();
+            if (valuesForCol.isEmpty()) return Collections.emptyList(); // No valid values -> No results
+            columnsValues.add(valuesForCol);
+        }
 
-                    if ("IN".equals(op)) {
-                        Object val = fm.get("value");
-                        if (val instanceof Collection<?> col) {
-                            for (Object item : col) if (item != null) allKeys.add(String.valueOf(item));
-                        }
-                    } else if ("=".equals(op)) {
-                        Object val = fm.get("value");
-                        if (val != null) allKeys.add(String.valueOf(val));
-                    }
+        // 3. Generate Keys
+        if (sortedCols.size() == 1) {
+            // Single column: No joining needed
+            return columnsValues.get(0);
+        } else {
+            // Multiple columns: Cartesian Product + Join with ":"
+            return generateCompositeKeys(columnsValues);
+        }
+    }
+
+    // Helper to generate Cartesian product of keys (e.g. [A,B] x [1,2] -> [A:1, A:2, B:1, B:2])
+    private List<String> generateCompositeKeys(List<List<String>> lists) {
+        List<String> result = new ArrayList<>();
+        if (lists.isEmpty()) {
+            result.add("");
+            return result;
+        }
+
+        List<String> firstList = lists.get(0);
+        List<String> remainingRecursive = generateCompositeKeys(lists.subList(1, lists.size()));
+
+        for (String head : firstList) {
+            for (String tail : remainingRecursive) {
+                if (tail.isEmpty()) {
+                    result.add(head);
                 } else {
-                    // Scalar equality
-                    allKeys.add(String.valueOf(constraint));
+                    result.add(head + ":" + tail);
                 }
             }
         }
-        return allKeys;
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> normalizeConstraints(Object filterValue) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        if (filterValue instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map) result.add((Map<String, Object>) item);
+            }
+        } else if (filterValue instanceof Map) {
+            result.add((Map<String, Object>) filterValue);
+        } else {
+            Map<String, Object> simple = new HashMap<>();
+            simple.put("op", "=");
+            simple.put("value", filterValue);
+            result.add(simple);
+        }
+        return result;
     }
 
     private Object aggregateValues(Map<String, Object> data, List<String> keys, DataSourceSpec.Type type) {
@@ -115,9 +216,9 @@ public class ResultDistributor {
             Object v = data.get(key);
             if (v != null) values.add(v);
         }
+
         if (values.isEmpty()) return getDefaultValue(type);
 
-        // Simple aggregation logic (truncated for brevity - use full logic from original file)
         if (type == DataSourceSpec.Type.DB_SUM) {
             double sum = 0;
             for (Object v : values) if (v instanceof Number n) sum += n.doubleValue();
@@ -126,8 +227,16 @@ public class ResultDistributor {
             long sum = 0;
             for (Object v : values) if (v instanceof Number n) sum += n.longValue();
             return sum;
+        } else if (type == DataSourceSpec.Type.DB_MAX) {
+            // Logic for Max
+            return values.stream().map(v -> (Comparable)v).max(Comparator.naturalOrder()).orElse(null);
+        } else if (type == DataSourceSpec.Type.DB_MIN) {
+            // Logic for Min
+            return values.stream().map(v -> (Comparable)v).min(Comparator.naturalOrder()).orElse(null);
         }
-        // ... include other types from original code ...
+
+        // For DB_VALUE or TEXT, we generally return the first match.
+        // If multiple keys matched (e.g. IN clause for Text?), it's ambiguous, returning first is standard fallback.
         return values.get(0);
     }
 

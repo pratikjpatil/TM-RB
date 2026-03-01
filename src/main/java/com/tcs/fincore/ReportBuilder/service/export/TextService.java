@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -17,6 +18,8 @@ public class TextService implements ReportExporter {
     private static final String DELIMITER = "|";
     private static final String LINE_SEP = System.lineSeparator();
     private static final String BANK_NAME = "STATE BANK OF INDIA";
+    // Pre-compiled pattern for performance to catch all line break variations
+    private static final Pattern NEWLINE_PATTERN = Pattern.compile("\\R");
     private static final String SEPARATOR_LINE = "=".repeat(80);
 
     @Override
@@ -38,13 +41,13 @@ public class TextService implements ReportExporter {
     public byte[] generate(ExportModel model) {
         StringBuilder sb = new StringBuilder();
 
-        // 1. Header - Bank Name (Centered)
+        // 1. Header - Bank Name
         sb.append(SEPARATOR_LINE).append(LINE_SEP);
         sb.append(centerText(BANK_NAME, 80)).append(LINE_SEP);
         sb.append(SEPARATOR_LINE).append(LINE_SEP);
         sb.append(LINE_SEP);
 
-        // 2. Report Title (Centered if present)
+        // 2. Report Title
         if (model.getTitle() != null && !model.getTitle().isBlank()) {
             sb.append(centerText(model.getTitle(), 80)).append(LINE_SEP);
             sb.append(LINE_SEP);
@@ -53,10 +56,16 @@ public class TextService implements ReportExporter {
         // 3. Metadata
         if (model.getHeadingContent() != null) {
             for (Map<String, Object> meta : model.getHeadingContent()) {
-                sb.append(meta.get("name").toString()).append(": ").append(meta.get("value").toString()).append(LINE_SEP);
+                String metaVal = String.valueOf(meta.get("value"));
+                // Sanitize metadata values as well just in case
+                sb.append(meta.get("name").toString())
+                        .append(": ")
+                        .append(sanitizeForSingleLine(metaVal))
+                        .append(LINE_SEP);
             }
             sb.append(LINE_SEP);
         }
+        sb.append(SEPARATOR_LINE).append(LINE_SEP);
 
         List<ExportModel.Column> cols = model.getColumns();
         if (cols == null) cols = Collections.emptyList();
@@ -64,9 +73,10 @@ public class TextService implements ReportExporter {
         // 4. Column Headers
         List<String> headers = new ArrayList<>();
         for (ExportModel.Column c : cols) {
-            headers.add(c.getName() == null ? "" : c.getName());
+            headers.add(c.getName() == null ? "" : sanitizeForSingleLine(c.getName()));
         }
         sb.append(String.join(DELIMITER, headers)).append(LINE_SEP);
+        sb.append(SEPARATOR_LINE).append(LINE_SEP);
 
         // 5. Data Rows
         if (model.getRows() != null) {
@@ -86,12 +96,18 @@ public class TextService implements ReportExporter {
                             val = m.get("value");
                         }
 
+                        String formattedString;
                         try {
-                            lineValues.add(FormatUtils.format(val, format));
+                            // First format the object (e.g., Dates/Numbers)
+                            formattedString = FormatUtils.format(val, format);
                         } catch (Exception e) {
                             log.warn("Failed to format cell value: {}", e.getMessage());
-                            lineValues.add(String.valueOf(val));
+                            formattedString = String.valueOf(val);
                         }
+
+                        // CRITICAL FIX: Sanitize the result to remove newlines
+                        lineValues.add(sanitizeForSingleLine(formattedString));
+
                         currentRawIndex++;
                     } else {
                         lineValues.add("");
@@ -102,6 +118,18 @@ public class TextService implements ReportExporter {
         }
 
         return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Replaces any line break characters with a space to ensure the
+     * record stays on a single physical line.
+     * * @param input The string to sanitize
+     * @return String with no line breaks
+     */
+    private String sanitizeForSingleLine(String input) {
+        if (input == null) return "";
+        // Replace \n, \r, or \r\n with a single space
+        return NEWLINE_PATTERN.matcher(input).replaceAll(" ");
     }
 
     /**

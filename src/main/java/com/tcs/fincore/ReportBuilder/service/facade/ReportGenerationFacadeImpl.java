@@ -1,7 +1,13 @@
+
+
+
+
 package com.tcs.fincore.ReportBuilder.service.facade;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcs.fincore.ReportBuilder.exception.ReportProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
+import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
+import com.tcs.fincore.ReportBuilder.kafka.publisher.ReportEventPublisher;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.model.ReportViewRequest;
@@ -14,166 +20,212 @@ import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 import com.tcs.fincore.ReportBuilder.util.FileStorageUtil;
 import com.tcs.fincore.ReportBuilder.util.ReportFileNameUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
-
+@Slf4j
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
+    private final ObjectMapper objectMapper;
     private final ReportMetadataService metadataService;
     private final ReportRuntimeService runtimeService;
     private final ReportExecutionService executionService;
     private final ExporterFactory exporterFactory;
     private final FileSystem hdfsFileSystem;
+    private final ReportEventPublisher eventPublisher;
+
+    @Value("${report.batch.hdfs-base-path:/reports}")
+    private String defaultHdfsBasePath;
+
+    private static final List<String> ALLOWED_FORMATS = List.of("pdf", "xlsx", "csv", "psv");
+    private static final List<String> DEFAULT_FORMATS  = List.of("pdf", "xlsx", "psv");
+
+    // =========================================================================
+    // Synchronous generation — REST only, no lifecycle events
+    // =========================================================================
 
     @Override
     public ReportFileResponse generateReportFile(ReportViewRequest request, String formatType) {
-        log.info("Starting report generation: template={}, variant={}, format={}",
+        log.info("Starting synchronous report generation: template={}, variant={}, format={}",
                 request.getTemplateId(), request.getVariantCode(), formatType);
 
         try {
-            // 1. Prepare Data (caching handled in metadata service)
             ReportContext context = prepareReportContext(request);
-
-//            log.info("Report context :: {}", context);
-
-            // 2. Execute Pipeline (Fetch Data -> Calculate -> Create Model)
             ExportModel model = executionService.generateModelOnly(context.template());
 
-            // 3. Export to specific format using Strategy Pattern
             ReportExporter exporter = exporterFactory.getExporter(formatType);
             byte[] content = exporter.generate(model);
 
-            // 4. Build Response
             String fileName = ReportFileNameUtil.buildFileName(
                     context.template(), context.variant(), request.getParams());
 
-            log.info("Report generation completed: {} ({} bytes)",
+            log.info("Synchronous report generation completed: {} ({} bytes)",
                     fileName + exporter.getFileExtension(), content.length);
 
-            return new ReportFileResponse(
-                    fileName,
-                    exporter.getMediaType(),
-                    content);
+            return new ReportFileResponse(fileName, exporter.getMediaType(), content);
 
         } catch (Exception e) {
-            log.error("Report generation failed for template {}: {}",
+            log.error("Synchronous report generation failed for template {}: {}",
                     request.getTemplateId(), e.getMessage(), e);
             throw new ValidationException("Report generation failed: " + e.getMessage(), e);
         }
     }
 
+    // =========================================================================
+    // Asynchronous HDFS generation — REST or Kafka triggered, with lifecycle events
+    // =========================================================================
+
     /**
-     * Made async to prevent blocking HTTP threads
-     * Returns immediately with job ID, actual generation happens in background
+     * Generates a single report and stores all configured formats to HDFS.
+     *
+     * <p>Runs on the {@code reportExecutor} thread pool so the calling thread (HTTP or Kafka
+     * consumer) returns immediately.
+     *
+     * <p>HDFS path: {@code {basePath}/{date}/{reportId}/{fileName}.{ext}}
      */
     @Override
     @Async("reportExecutor")
-    public void generateAndStoreToHdfs(ReportViewRequest request) {
-        log.info("Starting async HDFS report generation: template={}, variant={}",
-                request.getTemplateId(), request.getVariantCode());
+    public void generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext executionContext) {
+        Instant jobStartTime = Instant.now();
+        String jobId   = resolveJobId(request, executionContext);
+        String templateId   = request.getTemplateId();
+        String variantCode  = request.getVariantCode();
+
+        log.info("Starting async single-mode HDFS generation: jobId={} templateId={} variant={}",
+                jobId, templateId, variantCode);
+
+        // -- Publish STARTED event (Kafka-triggered jobs only) -----------------
+        eventPublisher.publishSingleStarted(executionContext, jobId, templateId, variantCode);
 
         try {
-            // 1. Prepare Data
-            ReportContext context = prepareReportContext(request);
+            // 1. Prepare data
+            ReportContext reportCtx = prepareReportContext(request);
 
-            // 2. Execute Pipeline
-            ExportModel model = executionService.generateModelOnly(context.template());
+            // 2. Execute report pipeline
+            ExportModel model = executionService.generateModelOnly(reportCtx.template());
 
-            // 3. Prepare HDFS Path
+            // 3. Resolve HDFS directory: basePath/date/reportId/
+            String reportId  = reportCtx.template().getReportMeta().getReportId();
+            Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, LocalDate.now(), reportId);
+
+            // 4. Build file name (without extension — added per-format)
             String fileName = ReportFileNameUtil.buildFileName(
-                    context.template(), context.variant(), request.getParams());
-            Path directory = createHdfsDirectory("/reports", LocalDate.now());
+                    reportCtx.template(), reportCtx.variant(), request.getParams());
 
-            // 4. Generate and Store ALL formats with error tracking
-            List<String> formats = List.of("pdf", "xlsx", "txt");
+            // 5. Export and persist all requested formats
+            List<String> formats = resolveFormats();
             int successCount = 0;
             int failureCount = 0;
 
             for (String format : formats) {
+                if (!ALLOWED_FORMATS.contains(format.toLowerCase())) {
+                    log.warn("Unsupported output format '{}' requested for jobId={}. Skipping.", format, jobId);
+                    continue;
+                }
                 try {
                     ReportExporter exporter = exporterFactory.getExporter(format);
-                    byte[] content = exporter.generate(model);
-                    Path filePath = new Path(directory, fileName);
+                    byte[] content  = exporter.generate(model);
+                    Path   filePath = new Path(directory, fileName + exporter.getFileExtension());
 
-                    // Thread-safe write with retry
                     FileStorageUtil.writeToFile(content, hdfsFileSystem, filePath);
                     successCount++;
-
-                    log.info("Stored {} format to HDFS: {}", format, filePath);
+                    log.info("Stored single-mode {} report to HDFS: jobId={} path={}", format, jobId, filePath);
 
                 } catch (Exception e) {
                     failureCount++;
-                    log.error("Failed to store {} format: {}", format, e.getMessage());
+                    log.error("Failed to store {} format for single-mode jobId={}: {}",
+                            format, jobId, e.getMessage(), e);
                 }
             }
 
+            // 6. Log summary
             if (failureCount > 0) {
-                log.warn("HDFS storage completed with errors: {}/{} formats succeeded",
-                        successCount, formats.size());
+                log.warn("Single-mode HDFS storage completed with errors: {}/{} formats succeeded. jobId={}",
+                        successCount, formats.size(), jobId);
             } else {
-                log.info("Successfully stored all {} report formats to HDFS for template: {}",
-                        formats.size(), request.getTemplateId());
+                log.info("Single-mode HDFS generation completed successfully: {} formats written. jobId={}",
+                        successCount, jobId);
             }
 
+            // -- Publish COMPLETED event (Kafka-triggered jobs only) -----------
+            eventPublisher.publishSingleCompleted(executionContext, jobId, templateId, variantCode, jobStartTime);
+
         } catch (Exception e) {
-            log.error("HDFS report generation failed for template {}: {}",
-                    request.getTemplateId(), e.getMessage(), e);
-            throw new ValidationException("HDFS report generation failed: " + e.getMessage(), e);
+            log.error("Single-mode HDFS generation failed: jobId={} templateId={} error={}",
+                    jobId, templateId, e.getMessage(), e);
+
+            // -- Publish FAILED event (Kafka-triggered jobs only) --------------
+            eventPublisher.publishSingleFailed(
+                    executionContext, jobId, templateId, variantCode,
+                    e.getMessage(), e.getClass().getSimpleName(), jobStartTime);
+
+            // Re-throw so @Async captures it and Kafka consumer can detect failure
+            throw new ReportProcessingException(
+                    "Single-mode HDFS generation failed for jobId=" + jobId, e);
         }
     }
 
-    // --- Helper Methods ---
+    // =========================================================================
+    // Internal helpers
+    // =========================================================================
 
     private record ReportContext(ReportTemplate template, ReportVariant variant) {}
 
-
     private ReportContext prepareReportContext(ReportViewRequest request) {
-        // Load Template
         ReportTemplate rawTemplate = metadataService.getTemplate(request.getTemplateId());
 
-        // CRITICAL: Deep Copy Template
-        // Since runtime service modifies the template (injects filters, replaces text),
-        // we must not modify the cached instance.
+        // Deep copy is critical: the runtime service mutates the template (injects filters,
+        // replaces placeholders) and the original is cached — never modify the cached instance.
         ReportTemplate runtimeTemplate = deepCopyTemplate(rawTemplate);
 
-        // Load Variant
         ReportVariant variant = null;
         if (request.getVariantCode() != null && !request.getVariantCode().isBlank()) {
             variant = metadataService.getVariant(request.getTemplateId(), request.getVariantCode());
         }
 
-        // NEW: Centralized Context Preparation
         runtimeService.prepareRuntimeContext(runtimeTemplate, variant, request.getParams());
-
         return new ReportContext(runtimeTemplate, variant);
     }
 
     private ReportTemplate deepCopyTemplate(ReportTemplate original) {
         try {
-            // Using Jackson ObjectMapper (assumes ObjectMapper is injected or available)
-            ObjectMapper mapper = new ObjectMapper();
-            return mapper.readValue(mapper.writeValueAsString(original), ReportTemplate.class);
+            byte[] bytes = objectMapper.writeValueAsBytes(original);
+            return objectMapper.readValue(bytes, ReportTemplate.class);
         } catch (Exception e) {
-            throw new RuntimeException("Deep copy failed", e);
+            log.error("Deep copy failed for template {}: {}",
+                    original.getReportMeta().getReportId(), e.getClass().getSimpleName());
+            throw new ReportProcessingException("Failed to prepare report template for execution.", e);
         }
     }
 
-    private Path createHdfsDirectory(String basePath, LocalDate date) throws IOException {
-        String formattedDate = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
-        Path path = new Path(basePath, formattedDate);
+    /**
+     * Resolves the HDFS output directory for a single-mode job.
+     *
+     * <p><b>Structure:</b> {@code {basePath}/{date}/{reportId}/}
+     *
+     * <p>This deliberately omits the dimension-value subfolder used in batch mode.
+     * Single-mode generates one report per invocation — the report-ID folder is the
+     * natural grouping boundary.
+     */
+    private Path resolveHdfsDirectory(String basePath, LocalDate date, String reportId)
+            throws IOException {
+        String dateStr        = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
+        String safeReportId   = sanitizePathSegment(reportId);
+        Path   path           = new Path(basePath, dateStr + "/" + safeReportId);
 
         if (!hdfsFileSystem.exists(path)) {
             boolean created = hdfsFileSystem.mkdirs(path);
@@ -182,7 +234,42 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             }
             log.debug("Created HDFS directory: {}", path);
         }
-
         return path;
+    }
+
+    /**
+     * Sanitizes a path segment to prevent path traversal and filesystem issues.
+     * Mirrors the sanitization logic in {@code BatchJobOrchestrator}.
+     */
+    private String sanitizePathSegment(String value) {
+        if (value == null || value.isBlank()) {
+            throw new ValidationException("Path segment cannot be null or blank");
+        }
+        String sanitized = value.replaceAll("[^A-Za-z0-9_\\-]", "_");
+        if (sanitized.contains("..") || sanitized.startsWith("/") || sanitized.startsWith("\\")) {
+            throw new ValidationException("Invalid path segment: " + value);
+        }
+        return sanitized.length() > 64 ? sanitized.substring(0, 64) : sanitized;
+    }
+
+    /**
+     * Returns the output formats for a single-mode job.
+     *
+     * ReportViewRequest is a single-mode DTO and does not carry output format preferences
+     * (that is a BatchJobRequest concern). Single-mode jobs always use the default format set.
+     */
+    private List<String> resolveFormats() {
+        return DEFAULT_FORMATS;
+    }
+
+    private String resolveJobId(ReportViewRequest request, ReportExecutionContext context) {
+        if (context.isKafkaTriggered()
+                && context.getProcessRunId() != null
+                && context.getStageId() != null
+                && context.getRunId() != null) {
+            return String.join("_",
+                    context.getProcessRunId(), context.getStageId(), context.getRunId());
+        }
+        return "single_" + request.getTemplateId() + "_" + System.currentTimeMillis();
     }
 }

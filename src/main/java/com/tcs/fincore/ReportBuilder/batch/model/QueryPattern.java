@@ -73,24 +73,16 @@ public class QueryPattern {
      */
     public String getLogicalKey() {
         StringBuilder sb = new StringBuilder();
-        sb.append(table).append("|")
-                .append(column).append("|")
-                .append(aggregationType).append("|");
+        sb.append(table).append("|").append(column).append("|").append(aggregationType).append("|");
 
         // Add static filters (sorted for consistency)
         if (staticFilters != null && !staticFilters.isEmpty()) {
-            staticFilters.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> sb.append(e.getKey()).append("=").append(e.getValue()).append(";"));
+            staticFilters.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(e -> sb.append(e.getKey()).append("=").append(e.getValue()).append(";"));
         }
 
         // Add conditional filters signature
         if (conditionalFilters != null && !conditionalFilters.isEmpty()) {
-            conditionalFilters.stream()
-                    .sorted(Comparator.comparing(ConditionalFilter::getColumnName))
-                    .forEach(cf -> sb.append(cf.getColumnName())
-                            .append(cf.getOperator())
-                            .append(cf.getValue()).append(";"));
+            conditionalFilters.stream().sorted(Comparator.comparing(ConditionalFilter::getColumnName)).forEach(cf -> sb.append(cf.getColumnName()).append(cf.getOperator()).append(cf.getValue()).append(";"));
         }
 
         return sb.toString();
@@ -100,22 +92,12 @@ public class QueryPattern {
      * Check if this pattern is suitable for batch optimization
      */
     public boolean isBatchable() {
-        // Must have varying dimension
-//        if (varyingDimension == null ||
-//                varyingDimension.getAllValues() == null ||
-//                varyingDimension.getAllValues().size() < 10) {
-//            return false;
-//        }
-
-                if (varyingDimension == null ||
-                varyingDimension.getAllValues() == null){
-                    return false;
-                }
-
+        if (varyingDimension == null || varyingDimension.getAllValues() == null) {
+            return false;
+        }
 
         // Must have bulk filters OR varying dimension with high cardinality
         boolean hasBulkFilters = bulkFilters != null && !bulkFilters.isEmpty();
-//        log.info("bulk filters :: {}", bulkFilters);
         boolean hasHighCardinalityDimension = varyingDimension.getAllValues().size() > 100;
 
         return hasBulkFilters || hasHighCardinalityDimension;
@@ -125,16 +107,11 @@ public class QueryPattern {
      * Estimate result set size for memory planning
      */
     public long estimateResultSetSize() {
-        long dimensionSize = varyingDimension != null && varyingDimension.getAllValues() != null
-                ? varyingDimension.getAllValues().size()
-                : 1;
+        long dimensionSize = varyingDimension != null && varyingDimension.getAllValues() != null ? varyingDimension.getAllValues().size() : 1;
 
         long bulkSize = 1;
         if (bulkFilters != null && !bulkFilters.isEmpty()) {
-            bulkSize = bulkFilters.values().stream()
-                    .mapToLong(Set::size)
-                    .max()
-                    .orElse(1);
+            bulkSize = bulkFilters.values().stream().mapToLong(Set::size).max().orElse(1);
         }
 
         // Estimate: dimension × bulk filter size

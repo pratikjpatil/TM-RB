@@ -14,8 +14,8 @@ public class FilterSqlBuilder {
 
     private static final String JAVA_DATE_FMT = "yyyy-MM-dd";
 
-    //  NEW: Safety limits
-//    private static final int MAX_FILTER_CONDITIONS = 50;
+    private static final int MAX_IN_VALUES       = 40_000;
+    private static final int MAX_FILTER_CONDITIONS = 50;
 
     private FilterSqlBuilder() {
         // Utility class - prevent instantiation
@@ -142,11 +142,11 @@ public class FilterSqlBuilder {
 
                 //  Safety check
                 totalConditions += list.size();
-//                if (totalConditions > MAX_FILTER_CONDITIONS) {
-//                    throw new ValidationException(
-//                            "Too many filter conditions (" + totalConditions +
-//                                    ", max: " + MAX_FILTER_CONDITIONS + ")");
-//                }
+                if (totalConditions > MAX_FILTER_CONDITIONS) {
+                    throw new ValidationException(
+                            "Too many filter conditions (" + totalConditions +
+                                    ", max: " + MAX_FILTER_CONDITIONS + ")");
+                }
 
                 for (Object item : list) {
                     if (item instanceof Map<?, ?> conditionMap) {
@@ -173,19 +173,16 @@ public class FilterSqlBuilder {
             // ========================================
             // 2. HANDLE SINGLE CONDITION
             // ========================================
+
             if (filterValue instanceof Map<?, ?> conditionMap) {
                 totalConditions++;
-
-                String uniqueParamName = paramPrefix +
-                        globalParamCounter.getAndIncrement();
-
-                appendSingleCondition(
-                        where,
-                        params,
-                        column,
-                        uniqueParamName,
-                        (Map<String, Object>) conditionMap
-                );
+                if (totalConditions > MAX_FILTER_CONDITIONS) {
+                    throw new ValidationException(
+                            "Too many filter conditions. Maximum allowed: " + MAX_FILTER_CONDITIONS);
+                }
+                String uniqueParamName = paramPrefix + globalParamCounter.getAndIncrement();
+                appendSingleCondition(where, params, column, uniqueParamName,
+                        (Map<String, Object>) conditionMap);
                 continue;
             }
 
@@ -205,137 +202,88 @@ public class FilterSqlBuilder {
                 totalConditions, globalParamCounter.get());
     }
 
+
+    /// ////////////////////////////////////////////////////////////////////////////////////////////
+
     private static void appendSingleCondition(
-            StringBuilder where,
-            Map<String, Object> params,
-            String column,
-            String paramName,  //  Now properly used for uniqueness
-            Map<String, Object> condition) {
+            StringBuilder where, Map<String, Object> params,
+            String column, String paramName, Map<String, Object> condition) {
 
         String op = String.valueOf(condition.getOrDefault("op", "=")).toUpperCase();
-        String type = String.valueOf(condition.getOrDefault("dataType", "STRING"))
-                .toUpperCase();
+        String type = String.valueOf(condition.getOrDefault("dataType", "STRING")).toUpperCase();
         Object rawValue = condition.get("value");
 
         switch (op) {
-            // ========================================
-            // BASIC COMPARISON OPERATORS
-            // ========================================
             case "=", "!=", ">", "<", ">=", "<=", "LIKE" -> {
                 Object typedVal = convertValue(rawValue, type);
-
-                where.append(" AND ")
-                        .append(column)
-                        .append(" ")
-                        .append(op)
-                        .append(" :")
-                        .append(paramName);  // Use unique param name
-
+                where.append(" AND ").append(column).append(" ").append(op)
+                        .append(" :").append(paramName);
                 params.put(paramName, typedVal);
-
-                if (log.isTraceEnabled()) {
-                    log.trace("Added condition: {} {} :{} (value: {})",
-                            column, op, paramName, typedVal);
-                }
             }
 
-            // ========================================
-            // BETWEEN OPERATOR
-            // ========================================
             case "BETWEEN" -> {
                 if (!(rawValue instanceof List<?> list) || list.size() != 2) {
                     throw new ValidationException(
                             "BETWEEN requires List with exactly 2 values for column " + column);
                 }
-
                 Object val1 = convertValue(list.get(0), type);
                 Object val2 = convertValue(list.get(1), type);
-
                 String p1 = paramName + "_from";
                 String p2 = paramName + "_to";
-
-                where.append(" AND ")
-                        .append(column)
-                        .append(" BETWEEN :")
-                        .append(p1)
-                        .append(" AND :")
-                        .append(p2);
-
+                where.append(" AND ").append(column).append(" BETWEEN :")
+                        .append(p1).append(" AND :").append(p2);
                 params.put(p1, val1);
                 params.put(p2, val2);
             }
 
-            // ========================================
-            // IN OPERATOR (Performance Critical)
-            // ========================================
             case "IN" -> {
                 if (!(rawValue instanceof Collection<?> col)) {
                     throw new ValidationException(
                             "IN operator requires Collection for column " + column);
                 }
 
-                //  Convert all items to correct type
                 List<Object> typedList = new ArrayList<>();
                 for (Object item : col) {
                     typedList.add(convertValue(item, type));
                 }
 
-                //  Validation
                 if (typedList.isEmpty()) {
-                    where.append(" AND 1=0");  // Empty IN = no matches
+                    where.append(" AND 1=0");
                     return;
                 }
 
-//                if (typedList.size() > MAX_IN_VALUES) {
-//                    throw new ValidationException(
-//                            "IN clause too large: " + typedList.size() +
-//                                    " values (max: " + MAX_IN_VALUES + ") for column " + column);
-//                }
+                // SECURITY FIX: ENFORCE the IN list limit (never comment this out)
+                if (typedList.size() > MAX_IN_VALUES) {
+                    throw new ValidationException(
+                            "IN clause too large: " + typedList.size() +
+                                    " values (max: " + MAX_IN_VALUES + ") for column " + column);
+                }
 
-                //  OPTIMIZATION: Pad list to stable sizes for query plan reuse
                 padList(typedList);
 
-                // ========================================
-                // Handle Oracle 1000-item limit
-                // ========================================
                 if (typedList.size() <= 1000) {
-                    // Simple case: fits in one IN clause
-                    where.append(" AND ")
-                            .append(column)
-                            .append(" IN (:")
-                            .append(paramName)
-                            .append(")");
+                    where.append(" AND ").append(column).append(" IN (:").append(paramName).append(")");
                     params.put(paramName, typedList);
                 } else {
-                    // Split into multiple IN clauses with OR
                     List<List<Object>> chunks = splitList(typedList, 1000);
                     where.append(" AND (");
-
                     for (int i = 0; i < chunks.size(); i++) {
                         String chunkParam = paramName + "_chunk_" + i;
-                        where.append(column)
-                                .append(" IN (:")
-                                .append(chunkParam)
-                                .append(")");
+                        where.append(column).append(" IN (:").append(chunkParam).append(")");
                         params.put(chunkParam, chunks.get(i));
-
-                        if (i < chunks.size() - 1) {
-                            where.append(" OR ");
-                        }
+                        if (i < chunks.size() - 1) where.append(" OR ");
                     }
                     where.append(")");
-
-                    log.debug("Split IN clause into {} chunks for column {}",
-                            chunks.size(), column);
+                    log.debug("Split IN clause into {} chunks for column {}", chunks.size(), column);
                 }
             }
 
-            default -> {
-                throw new ValidationException(
-                        "Unsupported operator '" + op + "' for column " + column);
-            }
+            default -> throw new ValidationException(
+                    "Unsupported operator '" + op + "' for column " + column);
         }
     }
+
+    /// //////////////////////////////////////////////////
 
     /**
      * ? OPTIMIZATION: Pad list to nearest bucket size

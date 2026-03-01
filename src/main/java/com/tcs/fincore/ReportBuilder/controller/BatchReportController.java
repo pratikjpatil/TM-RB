@@ -1,3 +1,7 @@
+
+
+
+
 package com.tcs.fincore.ReportBuilder.controller;
 
 import com.tcs.fincore.ReportBuilder.batch.orchestrator.BatchJobOrchestrator;
@@ -10,12 +14,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
-/**
- * REST controller for batch report generation
- * Handles submission, tracking, and management of batch jobs
- */
 @RestController
 @RequestMapping("/api/report-builder/batch")
 @RequiredArgsConstructor
@@ -27,52 +29,54 @@ public class BatchReportController {
     @PostMapping("/submit")
     public ResponseEntity<?> submitBatchJob(@RequestBody BatchJobRequest request) {
 
-        log.info("Received batch job submission: template={}, variant={}, reports={}",
+        String correlationId = UUID.randomUUID().toString();
+        log.info("[{}] Received batch job submission: template={}, variant={}, reports={}",
+                correlationId,
                 request.getTemplateId(),
                 request.getVariantCode(),
                 request.getVaryingDimension() != null ?
                         request.getVaryingDimension().getValues().size() : 0);
 
         try {
-            // Submit job
             BatchJobStatus status = orchestrator.submitJob(request);
-
-            // Return initial status
             return ResponseEntity.accepted().body(Map.of(
                     "status", "ACCEPTED",
                     "message", "Batch job submitted successfully",
                     "jobId", status.getJobId(),
                     "totalReports", status.getProgress().getTotalReports(),
-                    "trackingUrl", "/report-builder/batch/status/" + status.getJobId()
+                    "trackingUrl", "/api/report-builder/batch/status/" + status.getJobId()
             ));
 
         } catch (ValidationException e) {
-            log.error("Validation failed: {}", e.getMessage());
+
+            log.warn("[{}] Validation failed for batch submission: {}", correlationId, e.getMessage());
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
-                    "message", e.getMessage()
+                    "message", e.getMessage(),
+                    "correlationId", correlationId
             ));
 
         } catch (Exception e) {
-            log.error("Failed to submit batch job: {}", e.getMessage(), e);
+
+            log.error("[{}] Unexpected error submitting batch job", correlationId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                     "status", "ERROR",
-                    "message", "Failed to submit batch job: " + e.getMessage()
+                    "message", "An unexpected error occurred. Please contact support.",
+                    "correlationId", correlationId
             ));
         }
     }
 
-    /**
-     * Get status of a batch job
-     *
-     * Returns detailed progress information including:
-     * - Current phase
-     * - Completed/failed report counts
-     * - Error details
-     * - Performance metrics
-     */
     @GetMapping("/status/{jobId}")
     public ResponseEntity<?> getJobStatus(@PathVariable String jobId) {
+
+
+        if (jobId == null || !jobId.matches("[A-Za-z0-9_\\-]+")) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "ERROR",
+                    "message", "Invalid jobId format."
+            ));
+        }
 
         try {
             BatchJobStatus status = orchestrator.getJobStatus(jobId);
@@ -81,29 +85,34 @@ public class BatchReportController {
         } catch (ValidationException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                     "status", "ERROR",
-                    "message", "Job not found: " + jobId
+                    "message", "Job not found."
             ));
 
         } catch (Exception e) {
-            log.error("Failed to get job status: {}", e.getMessage());
+            String correlationId = UUID.randomUUID().toString();
+            log.error("[{}] Failed to get job status for jobId={}", correlationId, jobId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                     "status", "ERROR",
-                    "message", "Failed to retrieve job status"
+                    "message", "Failed to retrieve job status.",
+                    "correlationId", correlationId
             ));
         }
     }
 
-    /**
-     * Cancel a running batch job
-     */
     @PostMapping("/cancel/{jobId}")
     public ResponseEntity<?> cancelJob(@PathVariable String jobId) {
+
+        if (jobId == null || !jobId.matches("[A-Za-z0-9_\\-]+")) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "ERROR",
+                    "message", "Invalid jobId format."
+            ));
+        }
 
         log.info("Cancellation requested for job: {}", jobId);
 
         try {
             orchestrator.cancelJob(jobId);
-
             return ResponseEntity.ok(Map.of(
                     "status", "SUCCESS",
                     "message", "Job cancellation initiated",
@@ -117,53 +126,63 @@ public class BatchReportController {
             ));
 
         } catch (Exception e) {
-            log.error("Failed to cancel job: {}", e.getMessage());
+            String correlationId = UUID.randomUUID().toString();
+            log.error("[{}] Failed to cancel job={}", correlationId, jobId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                     "status", "ERROR",
-                    "message", "Failed to cancel job"
+                    "message", "Failed to cancel job.",
+                    "correlationId", correlationId
             ));
         }
     }
 
     @PostMapping("/generate-all-branches")
-    public ResponseEntity<?> generateAllBranchReports(
-            @RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> generateAllBranchReports(@RequestBody Map<String, Object> request) {
 
-        log.info("Received request to generate reports for all branches");
+        String correlationId = UUID.randomUUID().toString();
+        log.info("[{}] Received request to generate reports for all branches", correlationId);
 
         try {
             String templateId = (String) request.get("templateId");
             String variantCode = (String) request.get("variantCode");
-            String reportDate = (String) request.get("reportDate");
+            String reportDate  = (String) request.get("reportDate");
 
             if (templateId == null || templateId.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of(
-                        "status", "ERROR",
-                        "message", "templateId is required"
-                ));
+                        "status", "ERROR", "message", "templateId is required"));
             }
 
-            // TODO: Fetch all active branch codes from database
-            // For now, expecting them in request
             @SuppressWarnings("unchecked")
-            java.util.List<String> branchCodes =
-                    (java.util.List<String>) request.get("branchCodes");
+            List<String> branchCodes = (List<String>) request.get("branchCodes");
 
             if (branchCodes == null || branchCodes.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
+                        "status", "ERROR", "message", "branchCodes list is required"));
+            }
+
+            for (String code : branchCodes) {
+                if (code == null || !code.matches("[A-Za-z0-9_\\-]{1,20}")) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "status", "ERROR",
+                            "message", "Invalid branch code format. Codes must be alphanumeric (max 20 chars)."
+                    ));
+                }
+            }
+
+            // SECURITY FIX: Cap the number of branch codes to prevent DoS
+            if (branchCodes.size() > 50_000) {
+                return ResponseEntity.badRequest().body(Map.of(
                         "status", "ERROR",
-                        "message", "branchCodes list is required"
+                        "message", "Too many branch codes (max: 50,000)."
                 ));
             }
 
-            // Build batch request
             BatchJobRequest batchRequest = new BatchJobRequest();
             batchRequest.setTemplateId(templateId);
             batchRequest.setVariantCode(variantCode);
             batchRequest.setCommonParams(Map.of("reportDate", reportDate));
 
-            BatchJobRequest.VaryingDimension dimension =
-                    new BatchJobRequest.VaryingDimension();
+            BatchJobRequest.VaryingDimension dimension = new BatchJobRequest.VaryingDimension();
             dimension.setParamName("branchCode");
             dimension.setValues(branchCodes);
             batchRequest.setVaryingDimension(dimension);
@@ -171,9 +190,8 @@ public class BatchReportController {
             batchRequest.setExecutionMode(BatchJobRequest.ExecutionMode.PARALLEL);
             batchRequest.setBatchSize(500);
             batchRequest.setParallelThreads(10);
-            batchRequest.setOutputFormats(java.util.List.of("pdf", "xlsx"));
+            batchRequest.setOutputFormats(List.of("pdf", "xlsx"));
 
-            // Submit job
             BatchJobStatus status = orchestrator.submitJob(batchRequest);
 
             return ResponseEntity.accepted().body(Map.of(
@@ -181,21 +199,24 @@ public class BatchReportController {
                     "message", "Batch job submitted for all branches",
                     "jobId", status.getJobId(),
                     "totalBranches", branchCodes.size(),
-                    "trackingUrl", "/report-builder/batch/status/" + status.getJobId()
+                    "trackingUrl", "/api/report-builder/batch/status/" + status.getJobId()
             ));
 
+        } catch (ValidationException e) {
+            log.warn("[{}] Validation error in generate-all-branches: {}", correlationId, e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "ERROR", "message", e.getMessage()));
+
         } catch (Exception e) {
-            log.error("Failed to generate all branch reports: {}", e.getMessage(), e);
+            log.error("[{}] Failed to generate all branch reports", correlationId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                     "status", "ERROR",
-                    "message", "Failed to submit job: " + e.getMessage()
+                    "message", "Failed to submit batch job. Please contact support.",
+                    "correlationId", correlationId
             ));
         }
     }
 
-    /**
-     * Health check endpoint
-     */
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of(

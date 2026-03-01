@@ -1,3 +1,5 @@
+
+
 package com.tcs.fincore.ReportBuilder.exception;
 
 import lombok.extern.slf4j.Slf4j;
@@ -5,63 +7,53 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
-import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * NEW: Global exception handler for consistent error responses
+ * SECURITY: Global exception handler ensures no internal exception details
+ * are ever returned in HTTP responses. All errors are logged internally
+ * with a correlationId that clients can reference when contacting support.
  */
-@RestControllerAdvice
 @Slf4j
-public class GlobalExceptionHandler {
+@RestControllerAdvice
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<Map<String, Object>> handleValidationException(ValidationException ex) {
-        log.error("Validation error: {}", ex.getMessage());
-        
-        Map<String, Object> body = new HashMap<>();
-        body.put("timestamp", LocalDateTime.now());
-        body.put("status", HttpStatus.BAD_REQUEST.value());
-        body.put("error", "Validation Error");
-        body.put("message", ex.getMessage());
-        
-        return ResponseEntity
-            .status(HttpStatus.BAD_REQUEST)
-            .body(body);
+    public ResponseEntity<Map<String, Object>> handleValidation(ValidationException ex) {
+        // Validation errors are safe to surface — they are our own controlled messages
+        log.warn("Validation error: {}", ex.getMessage());
+        return ResponseEntity.badRequest().body(errorBody(ex.getMessage(), null));
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(IllegalArgumentException ex) {
-        log.error("Invalid argument: {}", ex.getMessage());
-        
-        Map<String, Object> body = new HashMap<>();
-        body.put("timestamp", LocalDateTime.now());
-        body.put("status", HttpStatus.BAD_REQUEST.value());
-        body.put("error", "Invalid Argument");
-        body.put("message", ex.getMessage());
-        
+    @ExceptionHandler(ReportProcessingException.class)
+    public ResponseEntity<Map<String, Object>> handleProcessing(ReportProcessingException ex) {
+        String correlationId = UUID.randomUUID().toString();
+        log.error("[{}] Report processing error", correlationId, ex);
         return ResponseEntity
-            .status(HttpStatus.BAD_REQUEST)
-            .body(body);
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(errorBody("Report processing failed. Contact support.", correlationId));
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> handleGenericException(Exception ex) {
-        log.error("Unexpected error: {}", ex.getMessage(), ex);
-        
-        Map<String, Object> body = new HashMap<>();
-        body.put("timestamp", LocalDateTime.now());
-        body.put("status", HttpStatus.INTERNAL_SERVER_ERROR.value());
-        body.put("error", "Internal Server Error");
-        body.put("message", "An unexpected error occurred. Please contact support.");
-        
-        // In dev/debug mode, you might want to include the full stack trace
-        // body.put("details", ex.getMessage());
-        
+    public ResponseEntity<Map<String, Object>> handleAll(Exception ex) {
+        String correlationId = UUID.randomUUID().toString();
+        // SECURITY: Full exception (including cause chain) logged internally only
+        log.error("[{}] Unhandled exception: {}", correlationId, ex.getClass().getName(), ex);
         return ResponseEntity
-            .status(HttpStatus.INTERNAL_SERVER_ERROR)
-            .body(body);
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(errorBody("An unexpected error occurred. Contact support.", correlationId));
+    }
+
+    private Map<String, Object> errorBody(String message, String correlationId) {
+        var body = new java.util.LinkedHashMap<String, Object>();
+        body.put("status", "ERROR");
+        body.put("message", message);
+        body.put("timestamp", Instant.now().toString());
+        if (correlationId != null) body.put("correlationId", correlationId);
+        return body;
     }
 }

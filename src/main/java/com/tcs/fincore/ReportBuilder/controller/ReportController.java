@@ -1,5 +1,6 @@
 package com.tcs.fincore.ReportBuilder.controller;
 
+import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.model.ReportViewRequest;
 import com.tcs.fincore.ReportBuilder.service.facade.ReportGenerationFacade;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
@@ -59,53 +60,56 @@ public class ReportController {
         }
     }
 
-    /**
-     *  Async HDFS generation - returns immediately
-     *
-     */
+
     @PostMapping("/generate-for-hdfs")
     public ResponseEntity<?> generateForHdfs(@RequestBody ReportViewRequest request) {
-        log.info("Received request to store report in HDFS. TemplateId: {}, Variant: {}", 
-            request.getTemplateId(), request.getVariantCode());
+        log.info("Received single-mode HDFS generation request: templateId={}, variant={}",
+                request.getTemplateId(), request.getVariantCode());
 
         try {
-            // Validate request first
+            // Validate required fields before handing off to async pipeline
             if (request.getTemplateId() == null || request.getTemplateId().isBlank()) {
                 return ResponseEntity
-                    .badRequest()
-                    .body(Map.of(
-                        "status", "ERROR",
-                        "message", "templateId is required"
-                    ));
+                        .badRequest()
+                        .body(Map.of(
+                                "status", "ERROR",
+                                "message", "templateId is required"
+                        ));
             }
 
-            // Start async generation
-            reportFacade.generateAndStoreToHdfs(request);
+            // REST-triggered ? no Kafka lifecycle events will be published.
+            // The facade generates a timestamp-based jobId internally from the context.
+            ReportExecutionContext context = ReportExecutionContext.fromRest();
 
-            // Generate job ID for tracking
-            String jobId = "job_" + request.getTemplateId() + "_" + System.currentTimeMillis();
+            reportFacade.generateAndStoreToHdfs(request, context);
+
+            // Build a matching jobId for the response using the same pattern the facade uses
+            String jobId = "single_" + request.getTemplateId() + "_" + System.currentTimeMillis();
 
             return ResponseEntity.accepted()
-                .body(Map.of(
-                    "status", "ACCEPTED", 
-                    "message", "Report generation initiated asynchronously",
-                    "jobId", jobId,
-                    "templateId", request.getTemplateId(),
-                    "variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default"
-                ));
-                
+                    .body(Map.of(
+                            "status",      "ACCEPTED",
+                            "message",     "Single-mode report generation initiated asynchronously",
+                            "jobId",       jobId,
+                            "templateId",  request.getTemplateId(),
+                            "variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default"
+                    ));
+
         } catch (Exception e) {
-            log.error("Failed to initiate HDFS report generation: {}", e.getMessage(), e);
-            
+            log.error("Failed to initiate single-mode HDFS generation: templateId={} error={}",
+                    request.getTemplateId(), e.getMessage(), e);
+
             return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of(
-                    "status", "ERROR",
-                    "message", "Failed to initiate report generation: " + e.getMessage(),
-                    "templateId", request.getTemplateId()
-                ));
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "status",     "ERROR",
+                            "message",    "Failed to initiate report generation: " + e.getMessage(),
+                            "templateId", request.getTemplateId()
+                    ));
         }
     }
+
+
 
     /**
      *  NEW: Health check endpoint for report service

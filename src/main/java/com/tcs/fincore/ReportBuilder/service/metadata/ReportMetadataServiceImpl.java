@@ -66,9 +66,8 @@ public class ReportMetadataServiceImpl implements ReportMetadataService {
     @Transactional(readOnly = true)
     @Cacheable(value = "reportVariants", key = "#templateId + ':' + #variantCode", unless = "#result == null")
     public ReportVariant getVariant(String templateId, String variantCode) {
-        ReportTemplate template = getTemplate(templateId); // Cached lookup
-        ReportVariant variant = variantRepository.loadActiveVariant(templateId, variantCode);
+//        ReportTemplate template = getTemplate(templateId); // Cached lookup
 
-        return variant;
+        return variantRepository.loadActiveVariant(templateId, variantCode);
     }
 }

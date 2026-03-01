@@ -29,7 +29,7 @@ public class AsyncConfig {
         executor.setCorePoolSize(4);
         
         // Max threads for peak load
-        executor.setMaxPoolSize(20);
+        executor.setMaxPoolSize(60);
         
         // Queue capacity for backpressure
         executor.setQueueCapacity(100);
