@@ -65,6 +65,10 @@ public class BatchJobStatus {
         private int skippedReports;
         private double percentageComplete;
 
+        // Materialization progress (row-level)
+        private long estimatedMaterializationRows;
+        private long materializedRows;
+
         // Track completed dimension values (e.g., branch codes)
         private Set<String> completedValues;
         private Set<String> failedValues;

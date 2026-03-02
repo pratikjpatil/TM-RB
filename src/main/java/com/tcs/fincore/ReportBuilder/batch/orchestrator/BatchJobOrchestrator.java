@@ -13,6 +13,7 @@ import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.materializer.BatchDataMaterializer;
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
 import com.tcs.fincore.ReportBuilder.batch.processor.GlobalParamBatchProcessor;
+import com.tcs.fincore.ReportBuilder.batch.status.BatchJobStatusStore;
 import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
@@ -56,6 +57,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -70,6 +72,7 @@ public class BatchJobOrchestrator {
     private final QueryPatternAnalyzer patternAnalyzer;
     private final BatchDataMaterializer dataMaterializer;
     private final ResultDistributor resultDistributor;
+    private final BatchJobStatusStore batchJobStatusStore;
     private final BatchResultStore batchResultStore;
     private final CalculationService calculationService;
     private final ExporterFactory exporterFactory;
@@ -100,7 +103,6 @@ public class BatchJobOrchestrator {
     private String defaultHdfsBasePath;
 
 
-    private final ConcurrentHashMap<String, BatchJobStatus> jobStatusMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicBoolean> cancellationTokens = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<Future<?>>> jobFutures = new ConcurrentHashMap<>();
 
@@ -150,20 +152,7 @@ public class BatchJobOrchestrator {
     @Scheduled(fixedDelayString = "${report.batch.status.cleanup-interval-ms:1800000}")
     public void evictStaleJobStatuses() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(statusTtlMinutes);
-        int before = jobStatusMap.size();
-        jobStatusMap.entrySet().removeIf(entry -> {
-            BatchJobStatus s = entry.getValue();
-            boolean terminal = s.getStatus() == BatchJobStatus.JobState.COMPLETED
-                    || s.getStatus() == BatchJobStatus.JobState.FAILED
-                    || s.getStatus() == BatchJobStatus.JobState.CANCELLED;
-            LocalDateTime completionTime = s.getCompletionTime();
-            boolean stale = terminal && completionTime != null && completionTime.isBefore(cutoff);
-            if (stale) {
-                executionContexts.remove(entry.getKey());
-            }
-            return stale;
-        });
-        int evicted = before - jobStatusMap.size();
+        int evicted = batchJobStatusStore.evictStaleTerminal(cutoff);
         if (evicted > 0) {
             log.info("Evicted {} stale job status entries (TTL={}m)", evicted, statusTtlMinutes);
         }
@@ -208,7 +197,7 @@ public class BatchJobOrchestrator {
         validateRequest(request);
 
         BatchJobStatus status = createInitialStatus(request);
-        jobStatusMap.put(request.getJobId(), status);
+        persistStatus(status);
 
         cancellationTokens.put(request.getJobId(), new AtomicBoolean(false));
         jobFutures.put(request.getJobId(), Collections.synchronizedList(new ArrayList<>()));
@@ -219,13 +208,13 @@ public class BatchJobOrchestrator {
     }
 
     public BatchJobStatus getJobStatus(String jobId) {
-        BatchJobStatus status = jobStatusMap.get(jobId);
+        BatchJobStatus status = batchJobStatusStore.find(jobId).orElse(null);
         if (status == null) throw new ValidationException("Job not found: " + jobId);
         return status;
     }
 
     public void cancelJob(String jobId) {
-        BatchJobStatus status = jobStatusMap.get(jobId);
+        BatchJobStatus status = batchJobStatusStore.find(jobId).orElse(null);
         if (status == null) throw new ValidationException("Job not found: " + jobId);
 
         if (status.getStatus() == BatchJobStatus.JobState.RUNNING) {
@@ -241,6 +230,7 @@ public class BatchJobOrchestrator {
             status.setStatus(BatchJobStatus.JobState.CANCELLED);
             status.setCurrentPhase(BatchJobStatus.JobPhase.CANCELLED);
             status.setCompletionTime(LocalDateTime.now());
+            persistStatus(status);
             log.info("Job {} cancelled", jobId);
         }
     }
@@ -252,7 +242,8 @@ public class BatchJobOrchestrator {
     @Async("reportExecutor")
     public void processJobAsync(BatchJobRequest request) {
         String jobId = request.getJobId();
-        BatchJobStatus status = jobStatusMap.get(jobId);
+        BatchJobStatus status = batchJobStatusStore.find(jobId)
+                .orElseThrow(() -> new ValidationException("Job not found: " + jobId));
         AtomicBoolean cancelled = cancellationTokens.get(jobId);
         ReportExecutionContext context = executionContexts.getOrDefault(
                 jobId, ReportExecutionContext.fromRest());
@@ -264,6 +255,7 @@ public class BatchJobOrchestrator {
             log.info("=== BATCH JOB STARTED: {} (trigger={}) ===", jobId, context.getTriggerSource());
             status.setStatus(BatchJobStatus.JobState.RUNNING);
             status.setStartTime(LocalDateTime.now());
+            persistStatus(status);
 
             // -- Publish STARTED event (Kafka-triggered jobs only) ---------------
             eventPublisher.publishBatchStarted(context, status);
@@ -289,6 +281,7 @@ public class BatchJobOrchestrator {
                 updatePhase(status, BatchJobStatus.JobPhase.COMPLETED);
                 status.setStatus(BatchJobStatus.JobState.COMPLETED);
                 status.setCompletionTime(LocalDateTime.now());
+                persistStatus(status);
                 log.info("=== BATCH JOB COMPLETED: {} ===", jobId);
                 logJobSummary(status);
 
@@ -303,6 +296,7 @@ public class BatchJobOrchestrator {
             status.setCompletionTime(LocalDateTime.now());
             status.getErrors().setLastErrorMessage(e.getMessage());
             status.getErrors().setLastErrorTime(LocalDateTime.now());
+            persistStatus(status);
 
             // -- Publish FAILED event (Kafka-triggered jobs only) -----------------
             eventPublisher.publishBatchTerminal(context, status, jobStartInstant);
@@ -312,7 +306,7 @@ public class BatchJobOrchestrator {
             resultDistributor.clearJobContext(jobId);
             cancellationTokens.remove(jobId);
             jobFutures.remove(jobId);
-            // NOTE: executionContexts is cleaned up by evictStaleJobStatuses
+            executionContexts.remove(jobId);
         }
     }
 
@@ -374,8 +368,16 @@ public class BatchJobOrchestrator {
         log.info("Phase 2: Materializing {} patterns (timeout={}m)",
                 analysis.patterns.size(), materializationTimeoutMinutes);
         long startTime = System.currentTimeMillis();
+        BatchJobStatus status = batchJobStatusStore.find(jobId).orElse(null);
 
         long estimatedRows = analysis.patterns.stream().mapToLong(QueryPattern::estimateResultSetSize).sum();
+        if (status != null) {
+            status.getProgress().setEstimatedMaterializationRows(estimatedRows);
+            status.getProgress().setMaterializedRows(0L);
+            status.setLastUpdateTime(LocalDateTime.now());
+            persistStatus(status);
+        }
+
         if ("memory".equalsIgnoreCase(resultStoreType) && estimatedRows > maxInMemoryEstimatedRows) {
             throw new ValidationException("Estimated materialized rows " + estimatedRows
                     + " exceed in-memory threshold " + maxInMemoryEstimatedRows
@@ -383,7 +385,33 @@ public class BatchJobOrchestrator {
         }
 
         batchResultStore.initializeJob(jobId, Duration.ofMinutes(statusTtlMinutes));
-        dataMaterializer.materializeAll(jobId, analysis.patterns, materializationTimeoutMinutes);
+        AtomicLong pendingRows = new AtomicLong(0);
+        dataMaterializer.materializeAll(jobId, analysis.patterns, materializationTimeoutMinutes, rows -> {
+            if (status == null) {
+                return;
+            }
+            long buffered = pendingRows.addAndGet(rows);
+            if (buffered >= 10_000) {
+                synchronized (status.getProgress()) {
+                    long total = status.getProgress().getMaterializedRows() + pendingRows.getAndSet(0);
+                    status.getProgress().setMaterializedRows(total);
+                }
+                status.setLastUpdateTime(LocalDateTime.now());
+                persistStatus(status);
+            }
+        });
+
+        if (status != null) {
+            long remainder = pendingRows.getAndSet(0);
+            if (remainder > 0) {
+                synchronized (status.getProgress()) {
+                    status.getProgress().setMaterializedRows(
+                            status.getProgress().getMaterializedRows() + remainder);
+                }
+            }
+            status.setLastUpdateTime(LocalDateTime.now());
+            persistStatus(status);
+        }
 
         resultDistributor.initialize(
                 jobId, analysis.patterns,
@@ -432,6 +460,7 @@ public class BatchJobOrchestrator {
                         status.getProgress().setFailedReports(
                                 status.getProgress().getFailedReports() + 1);
                         recordError(status, dimensionValue, e);
+                        persistStatus(status);
                     }
                 }, reportGenerationExecutor);
 
@@ -458,6 +487,7 @@ public class BatchJobOrchestrator {
         int completed = completedCount.get();
         if (failed > 0 && completed > 0) {
             status.setStatus(BatchJobStatus.JobState.PARTIALLY_COMPLETED);
+            persistStatus(status);
         }
     }
 
@@ -576,6 +606,7 @@ public class BatchJobOrchestrator {
             }
         }
         status.setLastUpdateTime(LocalDateTime.now());
+        persistStatus(status);
     }
 
     // -------------------------------------------------------------------------
@@ -663,6 +694,7 @@ public class BatchJobOrchestrator {
                         ? status.getStartTime().toInstant(ZoneOffset.UTC) : Instant.now());
 
         log.info("Job {} stopped — cancelled flag was set", jobId);
+        persistStatus(status);
     }
 
     private String generateJobId(BatchJobRequest request) {
@@ -695,7 +727,12 @@ public class BatchJobOrchestrator {
     private void updatePhase(BatchJobStatus status, BatchJobStatus.JobPhase phase) {
         status.setCurrentPhase(phase);
         status.setLastUpdateTime(LocalDateTime.now());
+        persistStatus(status);
         log.info("Job {} entering phase: {}", status.getJobId(), phase);
+    }
+
+    private void persistStatus(BatchJobStatus status) {
+        batchJobStatusStore.save(status, Duration.ofMinutes(statusTtlMinutes));
     }
 
     private Path createHdfsDirectory(String basePath, LocalDate date,
