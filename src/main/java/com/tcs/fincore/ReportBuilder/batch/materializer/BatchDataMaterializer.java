@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.function.LongConsumer;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -71,13 +72,14 @@ public class BatchDataMaterializer {
 
     // -----------------------------------------------------------------------
 
-    public void materializeAll(String jobId, List<QueryPattern> patterns, long timeoutMinutes) {
+    public void materializeAll(String jobId, List<QueryPattern> patterns, long timeoutMinutes,
+                               LongConsumer rowProgressConsumer) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (QueryPattern pattern : patterns) {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 try {
-                    materializePattern(jobId, pattern);
+                    materializePattern(jobId, pattern, rowProgressConsumer);
                     batchResultStore.markPatternAvailable(jobId, pattern.getPatternId());
                 } catch (Exception e) {
                     log.error("Failed to materialize pattern {}: {}",
@@ -114,14 +116,16 @@ public class BatchDataMaterializer {
 
     // -----------------------------------------------------------------------
 
-    private void materializePattern(String jobId, QueryPattern pattern) {
+    private void materializePattern(String jobId, QueryPattern pattern,
+                                    LongConsumer rowProgressConsumer) {
         long start = System.currentTimeMillis();
-        int rows = executeAndStore(pattern, jobId);
+        int rows = executeAndStore(pattern, jobId, rowProgressConsumer);
         log.debug("Materialized pattern {} in {}ms ({} rows)",
                 pattern.getPatternId(), System.currentTimeMillis() - start, rows);
     }
 
-    private int executeAndStore(QueryPattern pattern, String jobId) {
+    private int executeAndStore(QueryPattern pattern, String jobId,
+                                LongConsumer rowProgressConsumer) {
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT /*+ PARALLEL(8) */ ");
 
@@ -185,6 +189,7 @@ public class BatchDataMaterializer {
 
             batchResultStore.storeValue(jobId, pattern.getPatternId(), dimValue, bulkKey, value);
             rowCount.incrementAndGet();
+            rowProgressConsumer.accept(1L);
         });
         return rowCount.get();
     }
