@@ -6,24 +6,27 @@
 package com.tcs.fincore.ReportBuilder.batch.materializer;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
+import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.util.FilterSqlBuilder;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Component
 public class BatchDataMaterializer {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final BatchResultStore batchResultStore;
 
     // FIX #7: read from application.properties instead of hardcoded 3
     @Value("${report.batch.materialization.parallel-threads:3}")
@@ -32,8 +35,9 @@ public class BatchDataMaterializer {
     // FIX #7: not final — created in @PostConstruct after @Value injection
     private ExecutorService materializationExecutor;
 
-    public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc) {
+    public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc, BatchResultStore batchResultStore) {
         this.jdbc = jdbc;
+        this.batchResultStore = batchResultStore;
     }
 
     @PostConstruct
@@ -67,22 +71,17 @@ public class BatchDataMaterializer {
 
     // -----------------------------------------------------------------------
 
-    public Map<String, Map<String, Map<String, Object>>> materializeAll(
-            List<QueryPattern> patterns, long timeoutMinutes) {
-
-        Map<String, Map<String, Map<String, Object>>> allResults = new ConcurrentHashMap<>();
+    public void materializeAll(String jobId, List<QueryPattern> patterns, long timeoutMinutes) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (QueryPattern pattern : patterns) {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 try {
-                    Map<String, Map<String, Object>> res = materializePattern(pattern);
-                    allResults.put(pattern.getPatternId(), res);
+                    materializePattern(jobId, pattern);
+                    batchResultStore.markPatternAvailable(jobId, pattern.getPatternId());
                 } catch (Exception e) {
                     log.error("Failed to materialize pattern {}: {}",
                             pattern.getPatternId(), e.getMessage(), e);
-                    // Store empty result so distributor falls back gracefully for this pattern.
-                    allResults.put(pattern.getPatternId(), Collections.emptyMap());
                     // Re-throw so allOf tracks failure explicitly
                     throw new CompletionException(e);
                 }
@@ -96,7 +95,7 @@ public class BatchDataMaterializer {
                     .get(timeoutMinutes, TimeUnit.MINUTES);
         } catch (TimeoutException te) {
             log.error("Materialization timed out after {}m — {} patterns may be incomplete",
-                    timeoutMinutes, patterns.size() - allResults.size());
+                    timeoutMinutes, patterns.size());
             futures.forEach(f -> f.cancel(true));
             throw new ValidationException("Data materialization timed out after "
                     + timeoutMinutes + " minutes", te);
@@ -111,21 +110,18 @@ public class BatchDataMaterializer {
             throw new ValidationException("Data materialization interrupted", ie);
         }
 
-        return allResults;
     }
 
     // -----------------------------------------------------------------------
 
-    private Map<String, Map<String, Object>> materializePattern(QueryPattern pattern) {
+    private void materializePattern(String jobId, QueryPattern pattern) {
         long start = System.currentTimeMillis();
-        List<Map<String, Object>> rows = executeQuery(pattern);
-        Map<String, Map<String, Object>> nestedMap = transformResults(rows, pattern);
+        int rows = executeAndStore(pattern, jobId);
         log.debug("Materialized pattern {} in {}ms ({} rows)",
-                pattern.getPatternId(), System.currentTimeMillis() - start, rows.size());
-        return nestedMap;
+                pattern.getPatternId(), System.currentTimeMillis() - start, rows);
     }
 
-    private List<Map<String, Object>> executeQuery(QueryPattern pattern) {
+    private int executeAndStore(QueryPattern pattern, String jobId) {
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT /*+ PARALLEL(8) */ ");
 
@@ -164,7 +160,33 @@ public class BatchDataMaterializer {
         }
 
         log.debug("Pattern {} SQL: {} | params: {}", pattern.getPatternId(), sql, params);
-        return jdbc.queryForList(sql.toString(), params);
+        String dimColumn = pattern.getVaryingDimension() != null
+                ? pattern.getVaryingDimension().getColumnName() : null;
+        Set<String> bulkColumns = pattern.getBulkFilters() != null
+                ? pattern.getBulkFilters().keySet() : Collections.emptySet();
+
+        AtomicInteger rowCount = new AtomicInteger();
+        jdbc.query(sql.toString(), params, (RowCallbackHandler) rs -> {
+            String dimValue = "DEFAULT";
+            if (dimColumn != null) {
+                Object dimRaw = rs.getObject(dimColumn);
+                if (dimRaw == null) {
+                    dimRaw = rs.getObject(dimColumn.toUpperCase());
+                }
+                if (dimRaw != null) {
+                    dimValue = String.valueOf(dimRaw);
+                }
+            }
+            String bulkKey = buildBulkKey(rs, bulkColumns);
+            Object value = rs.getObject("AGG_VALUE");
+            if (value == null) {
+                value = rs.getObject("agg_value");
+            }
+
+            batchResultStore.storeValue(jobId, pattern.getPatternId(), dimValue, bulkKey, value);
+            rowCount.incrementAndGet();
+        });
+        return rowCount.get();
     }
 
     private Map<String, Object> buildUnifiedFilterMap(QueryPattern pattern) {
@@ -203,29 +225,7 @@ public class BatchDataMaterializer {
         return filters;
     }
 
-    private Map<String, Map<String, Object>> transformResults(
-            List<Map<String, Object>> rows, QueryPattern pattern) {
-        Map<String, Map<String, Object>> result = new HashMap<>();
-        String dimColumn = pattern.getVaryingDimension() != null
-                ? pattern.getVaryingDimension().getColumnName() : null;
-        Set<String> bulkColumns = pattern.getBulkFilters() != null
-                ? pattern.getBulkFilters().keySet() : Collections.emptySet();
-
-        for (Map<String, Object> row : rows) {
-
-            // FIX #5 defence: normalise column name to upper-case for Oracle compatibility.
-            String dimValue = dimColumn != null
-                    ? String.valueOf(row.getOrDefault(dimColumn,
-                    row.getOrDefault(dimColumn.toUpperCase(), "DEFAULT")))
-                    : "DEFAULT";
-            String bulkKey = buildBulkKey(row, bulkColumns);
-            result.computeIfAbsent(dimValue, k -> new HashMap<>())
-                    .put(bulkKey, row.get("AGG_VALUE"));
-        }
-        return result;
-    }
-
-    private String buildBulkKey(Map<String, Object> row, Set<String> bulkColumns) {
+    private String buildBulkKey(java.sql.ResultSet row, Set<String> bulkColumns) throws java.sql.SQLException {
         if (bulkColumns.isEmpty()) return "DEFAULT";
 
         List<String> sortedColumns = new ArrayList<>(bulkColumns);
@@ -233,7 +233,7 @@ public class BatchDataMaterializer {
 
         List<String> keyParts = new ArrayList<>(sortedColumns.size());
         for (String col : sortedColumns) {
-            Object val = row.getOrDefault(col, row.get(col.toUpperCase()));
+            Object val = Optional.ofNullable(row.getObject(col)).orElse(row.getObject(col.toUpperCase()));
             keyParts.add(val != null ? String.valueOf(val) : "NULL");
         }
         return String.join(":", keyParts);
