@@ -99,7 +99,7 @@ public class DbResolverImpl implements DbResolver {
             throw ve;
         } catch (EmptyResultDataAccessException er) {
             return null;
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             log.error("DB query failed for spec {}: {} SQL: {}", spec.getSpecId(), ex.getMessage(), where);
             throw new ValidationException("DB error: " + ex.getMessage(), ex);
         }

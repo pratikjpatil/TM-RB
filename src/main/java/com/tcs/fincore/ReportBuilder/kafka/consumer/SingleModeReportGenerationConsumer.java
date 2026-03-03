@@ -89,7 +89,7 @@ public class SingleModeReportGenerationConsumer {
             log.error("Validation error for single-mode Kafka job ({}): {}", kafkaOffset, e.getMessage());
             ack.acknowledge();
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // Transient/infrastructure failure — do NOT ack; let DefaultErrorHandler retry + DLT
             log.error("Failed to submit single-mode report job ({}): {}", kafkaOffset, e.getMessage(), e);
             throw new RuntimeException("Failed to submit single-mode report job — will retry", e);

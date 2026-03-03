@@ -100,7 +100,7 @@ public class TextService implements ReportExporter {
                         try {
                             // First format the object (e.g., Dates/Numbers)
                             formattedString = FormatUtils.format(val, format);
-                        } catch (Exception e) {
+                        } catch (RuntimeException e) {
                             log.warn("Failed to format cell value: {}", e.getMessage());
                             formattedString = String.valueOf(val);
                         }

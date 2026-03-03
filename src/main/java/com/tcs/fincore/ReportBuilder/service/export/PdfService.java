@@ -67,7 +67,7 @@ public class PdfService implements ReportExporter {
             img.scaleAbsolute(50f, 17f);
             log.info("Logo loaded successfully from: {}", path);
             return img;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to load logo from {}: {}", path, e.getMessage());
             return null;
         }
@@ -318,7 +318,7 @@ public class PdfService implements ReportExporter {
                         pageSize.getHeight() - 14f,
                         writer.getDirectContent());
 
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Error creating header", e);
             }
 
@@ -333,7 +333,7 @@ public class PdfService implements ReportExporter {
                         pageSize.getWidth() - document.rightMargin(),
                         document.bottomMargin() - 20f,
                         0);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Error creating footer", e);
             }
         }
@@ -389,7 +389,7 @@ public class PdfService implements ReportExporter {
         String formattedValue = raw;
         try {
             formattedValue = FormatUtils.format(raw, s.format);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("Format error for value '{}'", raw);
         }
 

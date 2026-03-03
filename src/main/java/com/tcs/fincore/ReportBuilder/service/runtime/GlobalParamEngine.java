@@ -76,7 +76,7 @@ public class GlobalParamEngine {
                     throw new ValidationException("Missing required global parameter: " + paramName);
                 }
 
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 if (failOnMissingDeps) {
                     throw new ValidationException("Failed to resolve global '" + paramName + "': " + e.getMessage(), e);
                 } else {
@@ -118,7 +118,7 @@ public class GlobalParamEngine {
         try {
             Object res = GlobalParamResolver.resolveRecursive(def.getSource().getFilters(), context);
             resolvedFilters = (Map<String, Object>) res;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             if (!strict) return null;
             throw e;
         }

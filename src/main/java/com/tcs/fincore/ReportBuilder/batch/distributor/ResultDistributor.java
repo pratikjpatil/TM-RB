@@ -68,7 +68,7 @@ public class ResultDistributor {
                         results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
                     }
                 }
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Distributor error for spec {}: {}", spec.getSpecId(), e.getMessage());
                 results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
             }

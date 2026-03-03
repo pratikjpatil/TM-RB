@@ -115,7 +115,7 @@ public class GlobalParamBatchProcessor {
                     finalFilters.put(dbCol, resolvedList);
                 }
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             return null;
         }
 
@@ -217,7 +217,7 @@ public class GlobalParamBatchProcessor {
 
             log.info("Fetched {} global param values for table {}", results.size(), plan.table);
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Failed to execute batch global fetch for table {}", plan.table, e);
         }
 

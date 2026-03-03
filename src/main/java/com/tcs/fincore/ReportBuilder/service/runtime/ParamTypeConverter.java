@@ -50,7 +50,7 @@ public class ParamTypeConverter {
 
                 default -> throw new ValidationException("Unsupported Global Param Type: " + type);
             };
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new ValidationException(String.format(
                     "Type Mismatch for '%s': Cannot convert '%s' to %s. Error: %s",
                     paramName, rawValue, type, e.getMessage()));

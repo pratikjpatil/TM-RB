@@ -67,7 +67,7 @@ public class QueryPatternAnalyzer {
             } catch (ReportProcessingException e) {
                 // Serious but isolated — log full stack, continue with other patterns
                 log.error("Processing error for pattern group '{}': {}", entry.getKey(), e.getMessage(), e);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 // Truly unexpected — log with full context for debugging
                 log.error("Unexpected error building pattern for group '{}'. PatternKey={}, ErrorType={}",
                         entry.getKey(), entry.getKey(), e.getClass().getName(), e);

@@ -126,7 +126,7 @@ public class AggregatorServiceImpl implements AggregatorService {
                     log.error("Query interrupted: specId={}", spec.getSpecId());
                     throw new CompletionException("Query interrupted: " + spec.getSpecId(), ie);
 
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
                     //Proper error logging instead of silent failure
                     log.error("Query FAILED: specId={} table={} column={} error={}",
                             spec.getSpecId(), spec.getTable(), spec.getColumn(), e.getMessage());
@@ -175,7 +175,13 @@ public class AggregatorServiceImpl implements AggregatorService {
                 dbLimiter.release(expectedPermits);
             }
 
-        } catch (Exception e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("Batch execution interrupted", e);
+            futures.forEach(f -> f.cancel(true));
+        } catch (ExecutionException e) {
+            log.error("Batch execution failed", e);
+        } catch (RuntimeException e) {
             log.error("Batch execution failed", e);
         }
 
@@ -203,7 +209,7 @@ public class AggregatorServiceImpl implements AggregatorService {
                         successCount++;
                     }
                 }
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 //Log exception instead of silent catch
                 log.error("Error collecting future result: {}", ex.getMessage());
                 failedCount++;

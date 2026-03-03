@@ -2,18 +2,20 @@ package com.tcs.fincore.ReportBuilder.controller;
 
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.model.ReportViewRequest;
+import com.tcs.fincore.ReportBuilder.exception.InfrastructureException;
+import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.service.facade.ReportGenerationFacade;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/report-builder")
@@ -30,9 +32,11 @@ public class ReportController {
     public ResponseEntity<?> viewReport(
             @PathVariable String format, 
             @RequestBody ReportViewRequest request) {
-        
-        log.info("Received request to view report. TemplateId: {}, Variant: {}, Format: {}",
-                request.getTemplateId(), request.getVariantCode(), format);
+        String correlationId = UUID.randomUUID().toString();
+        String templateId = request != null ? request.getTemplateId() : null;
+
+        log.info("View report request received: correlationId={} jobId={} templateId={} variantCode={} format={}",
+                correlationId, "N/A", templateId, request.getVariantCode(), format);
 
         try {
             ReportFileResponse response = reportFacade.generateReportFile(request, format);
@@ -47,22 +51,24 @@ public class ReportController {
                     .headers(headers)
                     .body(response.getContent());
                     
-        } catch (Exception e) {
-            log.error("Report generation failed: {}", e.getMessage(), e);
-            
-            return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of(
+        } catch (ValidationException e) {
+            log.warn("Validation failure in view report: correlationId={} jobId={} templateId={}",
+                    correlationId, "N/A", templateId, e);
+            return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
-                    "templateId", request.getTemplateId()
-                ));
+                    "correlationId", correlationId
+            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to generate report file", e);
         }
     }
 
 
     @PostMapping("/generate-for-hdfs")
     public ResponseEntity<?> generateForHdfs(@RequestBody ReportViewRequest request) {
+        String correlationId = UUID.randomUUID().toString();
+        String templateId = request != null ? request.getTemplateId() : null;
         log.info("Received single-mode HDFS generation request: templateId={}, variant={}",
                 request.getTemplateId(), request.getVariantCode());
 
@@ -95,17 +101,16 @@ public class ReportController {
                             "variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default"
                     ));
 
-        } catch (Exception e) {
-            log.error("Failed to initiate single-mode HDFS generation: templateId={} error={}",
-                    request.getTemplateId(), e.getMessage(), e);
-
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of(
-                            "status",     "ERROR",
-                            "message",    "Failed to initiate report generation: " + e.getMessage(),
-                            "templateId", request.getTemplateId()
-                    ));
+        } catch (ValidationException e) {
+            log.warn("Validation failure for HDFS generation: correlationId={} jobId={} templateId={}",
+                    correlationId, "N/A", templateId, e);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "ERROR",
+                    "message", e.getMessage(),
+                    "correlationId", correlationId
+            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to initiate single-mode HDFS report generation", e);
         }
     }
 

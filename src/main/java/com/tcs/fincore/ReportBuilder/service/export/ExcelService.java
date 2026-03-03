@@ -221,7 +221,7 @@ public class ExcelService implements ReportExporter {
             try {
                 String text = FormatUtils.format(value, format);
                 cell.setCellValue(text);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.warn("Failed to format value '{}', using toString(): {}", value, e.getMessage());
                 cell.setCellValue(String.valueOf(value));
             }

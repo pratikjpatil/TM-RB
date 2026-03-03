@@ -47,7 +47,7 @@ private static String formatCurrency(Object raw, Map<String, Object> format) {
     double val;
     try {
         val = toDoubleSafe(raw);
-    } catch (Exception e) {
+    } catch (RuntimeException e) {
         return "";
     }
 
@@ -185,7 +185,7 @@ private static String formatCurrency(Object raw, Map<String, Object> format) {
         try {
             LocalDate ld = LocalDate.parse(s);
             return ld.format(DateTimeFormatter.ofPattern(outFmt, Locale.ENGLISH));
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             return s;
         }
     }
@@ -194,7 +194,7 @@ private static String formatCurrency(Object raw, Map<String, Object> format) {
         if (o instanceof Number n) return n.doubleValue();
         try {
             return Double.parseDouble(String.valueOf(o).replaceAll(",", ""));
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             return 0.0;
         }
     }

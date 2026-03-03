@@ -102,7 +102,7 @@ public class FilterSqlBuilder {
                     return value.toString();
                 }
             }
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             throw new ValidationException(
                     "Type conversion failed: Cannot convert value '" + value +
                             "' to type " + type + ". Error: " + e.getMessage());

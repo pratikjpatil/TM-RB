@@ -143,7 +143,7 @@ public class CalculationService {
                 computed.put(cid, result);
                 successCount++;
 
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 failureCount++;
                 log.error("Formula failed [{}]: expr='{}' err={}", cid, cell.getExpression(), ex.getMessage());
                 computed.put(cid, 0d);

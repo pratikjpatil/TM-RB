@@ -1,11 +1,13 @@
 package com.tcs.fincore.ReportBuilder.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcs.fincore.ReportBuilder.exception.InfrastructureException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -35,9 +37,14 @@ public class ReportTemplateRepository {
             return objectMapper.readValue(json, ReportTemplate.class);
         } catch (EmptyResultDataAccessException ex) {
             throw new ValidationException("Active template not found for templateId=" + templateId);
-        } catch (Exception ex) {
-            log.error("Error loading template {}: {}", templateId, ex.getMessage(), ex);
-            throw new ValidationException("Failed to load template: " + ex.getMessage(), ex);
+        } catch (DataAccessException ex) {
+            log.error("Template query failed: jobId={} templateId={} correlationId={} errorType={}",
+                    "N/A", templateId, "N/A", ex.getClass().getSimpleName(), ex);
+            throw new InfrastructureException("Failed to load active template metadata", ex);
+        } catch (java.io.IOException ex) {
+            log.error("Template parse failed: jobId={} templateId={} correlationId={} errorType={}",
+                    "N/A", templateId, "N/A", ex.getClass().getSimpleName(), ex);
+            throw new InfrastructureException("Failed to parse template definition", ex);
         }
     }
 

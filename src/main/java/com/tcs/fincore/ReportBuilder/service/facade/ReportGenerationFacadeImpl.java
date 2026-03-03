@@ -78,10 +78,12 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
             return new ReportFileResponse(fileName, exporter.getMediaType(), content);
 
-        } catch (Exception e) {
-            log.error("Synchronous report generation failed for template {}: {}",
-                    request.getTemplateId(), e.getMessage(), e);
-            throw new ValidationException("Report generation failed: " + e.getMessage(), e);
+        } catch (ValidationException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.error("Synchronous generation failed: jobId={} templateId={} correlationId={} errorType={}",
+                    "N/A", request.getTemplateId(), "N/A", e.getClass().getSimpleName(), e);
+            throw new ReportProcessingException("Synchronous report generation failed", e);
         }
     }
 
@@ -147,8 +149,8 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
                 } catch (Exception e) {
                     failureCount++;
-                    log.error("Failed to store {} format for single-mode jobId={}: {}",
-                            format, jobId, e.getMessage(), e);
+                    log.error("Failed to store export artifact: jobId={} templateId={} correlationId={} format={} errorType={}",
+                            jobId, templateId, "N/A", format, e.getClass().getSimpleName(), e);
                 }
             }
 
@@ -165,17 +167,16 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             eventPublisher.publishSingleCompleted(executionContext, jobId, templateId, variantCode, jobStartTime);
 
         } catch (Exception e) {
-            log.error("Single-mode HDFS generation failed: jobId={} templateId={} error={}",
-                    jobId, templateId, e.getMessage(), e);
+            log.error("Single-mode HDFS generation failed: jobId={} templateId={} correlationId={} errorType={}",
+                    jobId, templateId, "N/A", e.getClass().getSimpleName(), e);
 
             // -- Publish FAILED event (Kafka-triggered jobs only) --------------
             eventPublisher.publishSingleFailed(
                     executionContext, jobId, templateId, variantCode,
-                    e.getMessage(), e.getClass().getSimpleName(), jobStartTime);
+                    "Single-mode generation failed", e.getClass().getSimpleName(), jobStartTime);
 
             // Re-throw so @Async captures it and Kafka consumer can detect failure
-            throw new ReportProcessingException(
-                    "Single-mode HDFS generation failed for jobId=" + jobId, e);
+            throw new ReportProcessingException("Single-mode HDFS generation failed", e);
         }
     }
 
@@ -205,7 +206,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
         try {
             byte[] bytes = objectMapper.writeValueAsBytes(original);
             return objectMapper.readValue(bytes, ReportTemplate.class);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Deep copy failed for template {}: {}",
                     original.getReportMeta().getReportId(), e.getClass().getSimpleName());
             throw new ReportProcessingException("Failed to prepare report template for execution.", e);
