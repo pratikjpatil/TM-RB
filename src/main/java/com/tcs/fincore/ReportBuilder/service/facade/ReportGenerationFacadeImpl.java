@@ -147,7 +147,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
                     successCount++;
                     log.info("Stored single-mode {} report to HDFS: jobId={} path={}", format, jobId, filePath);
 
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
                     failureCount++;
                     log.error("Failed to store export artifact: jobId={} templateId={} correlationId={} format={} errorType={}",
                             jobId, templateId, "N/A", format, e.getClass().getSimpleName(), e);
@@ -166,7 +166,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             // -- Publish COMPLETED event (Kafka-triggered jobs only) -----------
             eventPublisher.publishSingleCompleted(executionContext, jobId, templateId, variantCode, jobStartTime);
 
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             log.error("Single-mode HDFS generation failed: jobId={} templateId={} correlationId={} errorType={}",
                     jobId, templateId, "N/A", e.getClass().getSimpleName(), e);
 

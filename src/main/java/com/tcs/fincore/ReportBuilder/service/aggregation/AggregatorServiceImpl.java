@@ -175,6 +175,12 @@ public class AggregatorServiceImpl implements AggregatorService {
                 dbLimiter.release(expectedPermits);
             }
 
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("Batch execution interrupted", e);
+            futures.forEach(f -> f.cancel(true));
+        } catch (ExecutionException e) {
+            log.error("Batch execution failed", e);
         } catch (RuntimeException e) {
             log.error("Batch execution failed", e);
         }

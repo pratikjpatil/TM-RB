@@ -454,7 +454,7 @@ public class BatchJobOrchestrator {
                         int done = completedCount.incrementAndGet();
                         status.getProgress().getCompletedValues().add(dimensionValue);
                         updateProgress(status, done);
-                    } catch (RuntimeException e) {
+                    } catch (Exception e) {
                         log.error("Failed to generate report for {}: {}", dimensionValue, e.getMessage(), e);
                         status.getProgress().getFailedValues().add(dimensionValue);
                         status.getProgress().setFailedReports(
