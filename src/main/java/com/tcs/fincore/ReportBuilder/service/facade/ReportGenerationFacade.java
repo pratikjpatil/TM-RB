@@ -7,6 +7,8 @@ import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.model.ReportViewRequest;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 
+import java.util.concurrent.CompletableFuture;
+
 public interface ReportGenerationFacade {
 
     /**
@@ -21,5 +23,5 @@ public interface ReportGenerationFacade {
      */
     ReportFileResponse generateReportFile(ReportViewRequest request, String formatType);
 
-    void generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext context);
+    CompletableFuture<Void> generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext context);
 }

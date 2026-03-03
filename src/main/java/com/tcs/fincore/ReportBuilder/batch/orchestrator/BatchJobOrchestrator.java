@@ -41,6 +41,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -80,6 +81,8 @@ public class BatchJobOrchestrator {
     private final FileSystem hdfsFileSystem;
     private final GlobalParamEngine globalParamEngine;
     private final GlobalParamBatchProcessor globalParamBatchProcessor;
+    @Qualifier("reportExecutor")
+    private final Executor reportExecutor;
 
 
     private final ReportEventPublisher eventPublisher;
@@ -105,6 +108,7 @@ public class BatchJobOrchestrator {
 
     private final ConcurrentHashMap<String, AtomicBoolean> cancellationTokens = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<Future<?>>> jobFutures = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> statusLocks = new ConcurrentHashMap<>();
 
     /**
      * Per-job execution context store.
@@ -112,8 +116,6 @@ public class BatchJobOrchestrator {
      */
     private final ConcurrentHashMap<String, ReportExecutionContext> executionContexts =
             new ConcurrentHashMap<>();
-
-    private ExecutorService reportGenerationExecutor;
 
     // ----- Lifecycle -----
 
@@ -123,30 +125,13 @@ public class BatchJobOrchestrator {
         objectMapper.configure(
                 com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
-        reportGenerationExecutor = new ThreadPoolExecutor(
-                10, 20,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(1000),
-                new ThreadPoolExecutor.CallerRunsPolicy()
-        );
-
         log.info("BatchJobOrchestrator initialized. materializationTimeout={}m, generationTimeout={}m",
                 materializationTimeoutMinutes, generationTimeoutMinutes);
     }
 
     @PreDestroy
     public void shutdown() {
-        log.info("Shutting down reportGenerationExecutor...");
-        reportGenerationExecutor.shutdown();
-        try {
-            if (!reportGenerationExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                log.warn("Executor did not terminate in 30s — forcing shutdown");
-                reportGenerationExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            reportGenerationExecutor.shutdownNow();
-        }
+        log.info("BatchJobOrchestrator shutdown requested");
     }
 
     @Scheduled(fixedDelayString = "${report.batch.status.cleanup-interval-ms:1800000}")
@@ -201,6 +186,7 @@ public class BatchJobOrchestrator {
 
         cancellationTokens.put(request.getJobId(), new AtomicBoolean(false));
         jobFutures.put(request.getJobId(), Collections.synchronizedList(new ArrayList<>()));
+        statusLocks.put(request.getJobId(), new Object());
         executionContexts.put(request.getJobId(), context);
 
         processJobAsync(request);
@@ -223,8 +209,12 @@ public class BatchJobOrchestrator {
 
             List<Future<?>> futures = jobFutures.get(jobId);
             if (futures != null) {
-                futures.forEach(f -> f.cancel(true));
-                log.info("Cancelled {} futures for job {}", futures.size(), jobId);
+                List<Future<?>> snapshot;
+                synchronized (futures) {
+                    snapshot = new ArrayList<>(futures);
+                }
+                snapshot.forEach(f -> f.cancel(true));
+                log.info("Cancelled {} futures for job {}", snapshot.size(), jobId);
             }
 
             status.setStatus(BatchJobStatus.JobState.CANCELLED);
@@ -306,6 +296,7 @@ public class BatchJobOrchestrator {
             resultDistributor.clearJobContext(jobId);
             cancellationTokens.remove(jobId);
             jobFutures.remove(jobId);
+            statusLocks.remove(jobId);
             executionContexts.remove(jobId);
         }
     }
@@ -451,18 +442,22 @@ public class BatchJobOrchestrator {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
                         generateSingleReport(request, analysis, dimensionValue);
-                        int done = completedCount.incrementAndGet();
-                        status.getProgress().getCompletedValues().add(dimensionValue);
-                        updateProgress(status, done);
+                        synchronized (jobStatusLock(status.getJobId())) {
+                            int done = completedCount.incrementAndGet();
+                            status.getProgress().getCompletedValues().add(dimensionValue);
+                            updateProgress(status, done);
+                        }
                     } catch (Exception e) {
                         log.error("Failed to generate report for {}: {}", dimensionValue, e.getMessage(), e);
-                        status.getProgress().getFailedValues().add(dimensionValue);
-                        status.getProgress().setFailedReports(
-                                status.getProgress().getFailedReports() + 1);
-                        recordError(status, dimensionValue, e);
-                        persistStatus(status);
+                        synchronized (jobStatusLock(status.getJobId())) {
+                            status.getProgress().getFailedValues().add(dimensionValue);
+                            status.getProgress().setFailedReports(
+                                    status.getProgress().getFailedReports() + 1);
+                            recordError(status, dimensionValue, e);
+                            persistStatus(status);
+                        }
                     }
-                }, reportGenerationExecutor);
+                }, reportExecutor);
 
                 batchFutures.add(future);
                 jobFutures.get(status.getJobId()).add(future);
@@ -733,6 +728,10 @@ public class BatchJobOrchestrator {
 
     private void persistStatus(BatchJobStatus status) {
         batchJobStatusStore.save(status, Duration.ofMinutes(statusTtlMinutes));
+    }
+
+    private Object jobStatusLock(String jobId) {
+        return statusLocks.computeIfAbsent(jobId, id -> new Object());
     }
 
     private Path createHdfsDirectory(String basePath, LocalDate date,

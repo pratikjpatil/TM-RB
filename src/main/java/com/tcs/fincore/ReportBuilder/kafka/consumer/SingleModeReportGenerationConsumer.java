@@ -16,6 +16,7 @@ import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -77,7 +78,12 @@ public class SingleModeReportGenerationConsumer {
 
         // -- Step 4: Delegate to facade (runs @Async) -------------------------
         try {
-            reportGenerationFacade.generateAndStoreToHdfs(request, context);
+            CompletableFuture<Void> jobFuture = reportGenerationFacade.generateAndStoreToHdfs(request, context);
+            jobFuture.exceptionally(ex -> {
+                log.error("Async single-mode job failed after submission: jobId={} {}",
+                        compositeJobId, kafkaOffset, ex);
+                return null;
+            });
 
             // Ack AFTER successful submission (job is tracked internally via the composite ID)
             ack.acknowledge();

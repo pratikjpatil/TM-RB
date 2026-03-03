@@ -25,7 +25,6 @@ public class AggregatorServiceImpl implements AggregatorService {
     private final ExecutorService exec;
     private final Semaphore dbLimiter;
     private final long globalTimeoutMs;
-    private final int maxConcurrentQueries;
 
 
     // ============================================================
@@ -46,8 +45,6 @@ public class AggregatorServiceImpl implements AggregatorService {
         // FIX #24: derive ONE limit used by BOTH the thread pool AND the semaphore,
         // so they are always in sync. Leave 10 connections free for other operations.
         int safeLimit = Math.max(1, Math.min(maxConcurrentQueries, maxDbConnections - 10));
-        this.maxConcurrentQueries = safeLimit;
-
         this.exec = new ThreadPoolExecutor(
                 Math.min(10, safeLimit),  // core threads
                 safeLimit,                 // max threads = semaphore permits
@@ -164,16 +161,6 @@ public class AggregatorServiceImpl implements AggregatorService {
 
             // Cancel all pending futures
             futures.forEach(f -> f.cancel(true));
-
-            //Force cleanup of any stuck semaphore permits
-            int availablePermits = dbLimiter.availablePermits();
-            int expectedPermits = maxConcurrentQueries;
-            if (availablePermits < expectedPermits) {
-                log.warn("Semaphore leak detected. Available: {}, Expected: {}. Forcing cleanup.",
-                        availablePermits, expectedPermits);
-                dbLimiter.drainPermits();
-                dbLimiter.release(expectedPermits);
-            }
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -42,6 +42,7 @@ public class BatchDataMaterializer {
 
     // FIX #7: not final — created in @PostConstruct after @Value injection
     private ExecutorService materializationExecutor;
+    private final AtomicInteger materializerThreadCounter = new AtomicInteger(1);
 
     public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc, BatchResultStore batchResultStore) {
         this.jdbc = jdbc;
@@ -53,8 +54,7 @@ public class BatchDataMaterializer {
         this.materializationExecutor = Executors.newFixedThreadPool(
                 parallelThreads,
                 r -> {
-                    Thread t = new Thread(r, "materializer-" + r.hashCode());
-                    t.setDaemon(true);
+                    Thread t = new Thread(r, "materializer-" + materializerThreadCounter.getAndIncrement());
                     return t;
                 }
         );

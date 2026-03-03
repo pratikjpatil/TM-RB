@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -101,7 +102,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
      */
     @Override
     @Async("reportExecutor")
-    public void generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext executionContext) {
+    public CompletableFuture<Void> generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext executionContext) {
         Instant jobStartTime = Instant.now();
         String jobId   = resolveJobId(request, executionContext);
         String templateId   = request.getTemplateId();
@@ -165,6 +166,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
             // -- Publish COMPLETED event (Kafka-triggered jobs only) -----------
             eventPublisher.publishSingleCompleted(executionContext, jobId, templateId, variantCode, jobStartTime);
+            return CompletableFuture.completedFuture(null);
 
         } catch (Exception e) {
             log.error("Single-mode HDFS generation failed: jobId={} templateId={} correlationId={} errorType={}",
@@ -175,8 +177,8 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
                     executionContext, jobId, templateId, variantCode,
                     "Single-mode generation failed", e.getClass().getSimpleName(), jobStartTime);
 
-            // Re-throw so @Async captures it and Kafka consumer can detect failure
-            throw new ReportProcessingException("Single-mode HDFS generation failed", e);
+            return CompletableFuture.failedFuture(
+                    new ReportProcessingException("Single-mode HDFS generation failed", e));
         }
     }
 
