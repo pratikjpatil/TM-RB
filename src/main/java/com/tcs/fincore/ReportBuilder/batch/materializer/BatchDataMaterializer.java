@@ -21,6 +21,7 @@ import java.util.*;
 import java.util.function.LongConsumer;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Component
@@ -32,6 +33,12 @@ public class BatchDataMaterializer {
     // FIX #7: read from application.properties instead of hardcoded 3
     @Value("${report.batch.materialization.parallel-threads:3}")
     private int parallelThreads;
+
+    @Value("${report.batch.materialization.redis.flush-size:5000}")
+    private int redisFlushSize;
+
+    @Value("${report.batch.materialization.redis.flush-interval-ms:250}")
+    private long redisFlushIntervalMs;
 
     // FIX #7: not final — created in @PostConstruct after @Value injection
     private ExecutorService materializationExecutor;
@@ -170,28 +177,37 @@ public class BatchDataMaterializer {
                 ? pattern.getBulkFilters().keySet() : Collections.emptySet();
 
         AtomicInteger rowCount = new AtomicInteger();
-        jdbc.query(sql.toString(), params, (RowCallbackHandler) rs -> {
-            String dimValue = "DEFAULT";
-            if (dimColumn != null) {
-                Object dimRaw = rs.getObject(dimColumn);
-                if (dimRaw == null) {
-                    dimRaw = rs.getObject(dimColumn.toUpperCase());
+        BufferedResultWriter writer = writer(jobId, pattern.getPatternId());
+        try {
+            jdbc.query(sql.toString(), params, (RowCallbackHandler) rs -> {
+                String dimValue = "DEFAULT";
+                if (dimColumn != null) {
+                    Object dimRaw = rs.getObject(dimColumn);
+                    if (dimRaw == null) {
+                        dimRaw = rs.getObject(dimColumn.toUpperCase());
+                    }
+                    if (dimRaw != null) {
+                        dimValue = String.valueOf(dimRaw);
+                    }
                 }
-                if (dimRaw != null) {
-                    dimValue = String.valueOf(dimRaw);
+                String bulkKey = buildBulkKey(rs, bulkColumns);
+                Object value = rs.getObject("AGG_VALUE");
+                if (value == null) {
+                    value = rs.getObject("agg_value");
                 }
-            }
-            String bulkKey = buildBulkKey(rs, bulkColumns);
-            Object value = rs.getObject("AGG_VALUE");
-            if (value == null) {
-                value = rs.getObject("agg_value");
-            }
 
-            batchResultStore.storeValue(jobId, pattern.getPatternId(), dimValue, bulkKey, value);
-            rowCount.incrementAndGet();
-            rowProgressConsumer.accept(1L);
-        });
+                writer.buffer(dimValue, bulkKey, value);
+                rowCount.incrementAndGet();
+                rowProgressConsumer.accept(1L);
+            });
+        } finally {
+            writer.flush(true);
+        }
         return rowCount.get();
+    }
+
+    private BufferedResultWriter writer(String jobId, String patternId) {
+        return new BufferedResultWriter(jobId, patternId, redisFlushSize, redisFlushIntervalMs);
     }
 
     private Map<String, Object> buildUnifiedFilterMap(QueryPattern pattern) {
@@ -242,5 +258,55 @@ public class BatchDataMaterializer {
             keyParts.add(val != null ? String.valueOf(val) : "NULL");
         }
         return String.join(":", keyParts);
+    }
+
+    private class BufferedResultWriter {
+        private final String jobId;
+        private final String patternId;
+        private final int flushSize;
+        private final long flushIntervalMs;
+
+        private final List<BatchResultStore.BatchWrite> pendingWrites;
+        private final Set<String> seenIndexDataKeys = new HashSet<>();
+        private final Set<String> pendingIndexDataKeys = new HashSet<>();
+        private final AtomicLong lastFlushTs = new AtomicLong(System.currentTimeMillis());
+
+        private BufferedResultWriter(String jobId, String patternId, int flushSize, long flushIntervalMs) {
+            this.jobId = jobId;
+            this.patternId = patternId;
+            this.flushSize = Math.max(1000, flushSize);
+            this.flushIntervalMs = Math.max(50, flushIntervalMs);
+            this.pendingWrites = new ArrayList<>(this.flushSize);
+        }
+
+        private void buffer(String dimensionValue, String bulkKey, Object value) {
+            pendingWrites.add(new BatchResultStore.BatchWrite(dimensionValue, bulkKey, value));
+
+            String dataKey = String.join(":", jobId, patternId, dimensionValue);
+            if (seenIndexDataKeys.add(dataKey)) {
+                pendingIndexDataKeys.add(String.format("rb:batch:%s:%s:%s", jobId, patternId, dimensionValue));
+            }
+
+            if (pendingWrites.size() >= flushSize ||
+                    System.currentTimeMillis() - lastFlushTs.get() >= flushIntervalMs) {
+                flush(false);
+            }
+        }
+
+        private void flush(boolean force) {
+            if (pendingWrites.isEmpty() && !force) {
+                return;
+            }
+            if (pendingWrites.isEmpty() && pendingIndexDataKeys.isEmpty()) {
+                return;
+            }
+
+            batchResultStore.storeValues(jobId, patternId,
+                    new ArrayList<>(pendingWrites),
+                    new HashSet<>(pendingIndexDataKeys));
+            pendingWrites.clear();
+            pendingIndexDataKeys.clear();
+            lastFlushTs.set(System.currentTimeMillis());
+        }
     }
 }
