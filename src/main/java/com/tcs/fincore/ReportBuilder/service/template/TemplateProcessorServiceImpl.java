@@ -272,7 +272,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                 dynamicRowsExpanded += dbRows.size();
                 log.info("Expanded dynamic row -> {} new data rows from table {}", dbRows.size(), table);
 
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Failed to expand dynamic row from table {}: {}", table, e.getMessage());
                 throw new ValidationException("Dynamic row expansion failed: " + e.getMessage(), e);
             }
@@ -315,7 +315,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
 
         try {
             return jdbc.queryForList(sql.toString(), params);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Dynamic row query failed: {}", e.getMessage());
             throw new ValidationException("Failed to fetch dynamic rows: " + e.getMessage(), e);
         }
@@ -400,7 +400,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                         "GlobalParam:" + def.getName()
                 ));
 
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Failed to extract spec for Global Param '{}': {}", def.getName(), e.getMessage());
                 // Don't crash entire batch analysis for one bad param, but log it.
             }

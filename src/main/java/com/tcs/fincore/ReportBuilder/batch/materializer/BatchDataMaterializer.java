@@ -88,7 +88,7 @@ public class BatchDataMaterializer {
                 try {
                     materializePattern(jobId, pattern, rowProgressConsumer);
                     batchResultStore.markPatternAvailable(jobId, pattern.getPatternId());
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
                     log.error("Failed to materialize pattern {}: {}",
                             pattern.getPatternId(), e.getMessage(), e);
                     // Re-throw so allOf tracks failure explicitly

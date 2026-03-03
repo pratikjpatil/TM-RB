@@ -1,5 +1,6 @@
 package com.tcs.fincore.ReportBuilder.service.pipeline;
 
+import com.tcs.fincore.ReportBuilder.exception.ReportProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
@@ -51,9 +52,13 @@ public class ReportExecutionService {
             // 7. Convert to Export Model
             return templateProcessor.toExportModel(template, computed);
 
-        } catch (Exception ex) {
-            log.error("Pipeline failed for report {}: {}", template.getReportMeta().getReportId(), ex.getMessage(), ex);
-            throw new ValidationException("Report generation pipeline failed: " + ex.getMessage(), ex);
+        } catch (ValidationException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            String templateId = template != null && template.getReportMeta() != null ? template.getReportMeta().getReportId() : "N/A";
+            log.error("Pipeline execution failed: jobId={} templateId={} correlationId={} errorType={}",
+                    "N/A", templateId, "N/A", ex.getClass().getSimpleName(), ex);
+            throw new ReportProcessingException("Report generation pipeline failed", ex);
         }
     }
 }

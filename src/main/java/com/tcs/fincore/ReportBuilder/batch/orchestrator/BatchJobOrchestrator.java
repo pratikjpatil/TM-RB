@@ -289,7 +289,7 @@ public class BatchJobOrchestrator {
                 eventPublisher.publishBatchTerminal(context, status, jobStartInstant);
             }
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.error("Batch job {} failed: {}", jobId, e.getMessage(), e);
             status.setCurrentPhase(BatchJobStatus.JobPhase.FAILED);
             status.setStatus(BatchJobStatus.JobState.FAILED);
@@ -454,7 +454,7 @@ public class BatchJobOrchestrator {
                         int done = completedCount.incrementAndGet();
                         status.getProgress().getCompletedValues().add(dimensionValue);
                         updateProgress(status, done);
-                    } catch (Exception e) {
+                    } catch (RuntimeException e) {
                         log.error("Failed to generate report for {}: {}", dimensionValue, e.getMessage(), e);
                         status.getProgress().getFailedValues().add(dimensionValue);
                         status.getProgress().setFailedReports(
@@ -575,7 +575,7 @@ public class BatchJobOrchestrator {
                 Path filePath = new Path(directory, fileName + exporter.getFileExtension());
                 FileStorageUtil.writeToFile(content, hdfsFileSystem, filePath);
                 log.debug("Saved {} report for {}: {}", format, safeDimensionValue, filePath);
-            } catch (Exception e) {
+            } catch (RuntimeException e) {
                 log.error("Failed to save {} report for {}: {}", format, safeDimensionValue, e.getClass().getSimpleName());
             }
         }

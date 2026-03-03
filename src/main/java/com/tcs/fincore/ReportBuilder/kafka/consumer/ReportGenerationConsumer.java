@@ -89,7 +89,7 @@ public class ReportGenerationConsumer {
             log.error("Validation error for Kafka-triggered job ({}): {}", kafkaOffset, e.getMessage());
             ack.acknowledge();
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // Transient/infrastructure failure — do NOT ack; Kafka will redeliver
             log.error("Failed to submit Kafka-triggered job ({}): {}", kafkaOffset, e.getMessage(), e);
             // Spring Kafka's SeekToCurrentErrorHandler / DefaultErrorHandler will handle retries + DLT

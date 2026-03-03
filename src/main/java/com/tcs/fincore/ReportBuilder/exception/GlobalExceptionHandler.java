@@ -25,24 +25,25 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ValidationException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(ValidationException ex) {
         // Validation errors are safe to surface — they are our own controlled messages
-        log.warn("Validation error: {}", ex.getMessage());
+        log.warn("Validation error: correlationId={} jobId={} templateId={} message={}", UUID.randomUUID(), "N/A", "N/A", ex.getMessage());
         return ResponseEntity.badRequest().body(errorBody(ex.getMessage(), null));
     }
 
-    @ExceptionHandler(ReportProcessingException.class)
-    public ResponseEntity<Map<String, Object>> handleProcessing(ReportProcessingException ex) {
+    @ExceptionHandler({ReportProcessingException.class, InfrastructureException.class})
+    public ResponseEntity<Map<String, Object>> handleDomainFailures(RuntimeException ex) {
         String correlationId = UUID.randomUUID().toString();
-        log.error("[{}] Report processing error", correlationId, ex);
+        log.error("Unhandled domain failure: correlationId={} jobId={} templateId={} errorType={}",
+                correlationId, "N/A", "N/A", ex.getClass().getSimpleName(), ex);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(errorBody("Report processing failed. Contact support.", correlationId));
+                .body(errorBody("Internal report processing failure. Contact support.", correlationId));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleAll(Exception ex) {
         String correlationId = UUID.randomUUID().toString();
         // SECURITY: Full exception (including cause chain) logged internally only
-        log.error("[{}] Unhandled exception: {}", correlationId, ex.getClass().getName(), ex);
+        log.error("Unhandled exception: correlationId={} jobId={} templateId={} errorType={}", correlationId, "N/A", "N/A", ex.getClass().getName(), ex);
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(errorBody("An unexpected error occurred. Contact support.", correlationId));

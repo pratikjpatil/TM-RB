@@ -142,7 +142,7 @@ public class GlobalParamResolver {
         } catch (JexlException ex) {
             log.error("Failed to evaluate inline expression: '{}'. Error: {}", expression, ex.getMessage());
             throw new ValidationException("Invalid expression syntax: " + expression + ". " + ex.getMessage());
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             log.error("Unexpected error evaluating expression: '{}'", expression, ex);
             throw new ValidationException("Expression evaluation failed: " + ex.getMessage());
         }

@@ -7,6 +7,7 @@ package com.tcs.fincore.ReportBuilder.controller;
 import com.tcs.fincore.ReportBuilder.batch.orchestrator.BatchJobOrchestrator;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.exception.InfrastructureException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,21 +50,16 @@ public class BatchReportController {
 
         } catch (ValidationException e) {
 
-            log.warn("[{}] Validation failed for batch submission: {}", correlationId, e.getMessage());
+            log.warn("Batch submission validation failed: correlationId={} jobId={} templateId={}",
+                    correlationId, "N/A", request.getTemplateId(), e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
                     "correlationId", correlationId
             ));
 
-        } catch (Exception e) {
-
-            log.error("[{}] Unexpected error submitting batch job", correlationId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                    "status", "ERROR",
-                    "message", "An unexpected error occurred. Please contact support.",
-                    "correlationId", correlationId
-            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to submit batch job", e);
         }
     }
 
@@ -88,14 +84,8 @@ public class BatchReportController {
                     "message", "Job not found."
             ));
 
-        } catch (Exception e) {
-            String correlationId = UUID.randomUUID().toString();
-            log.error("[{}] Failed to get job status for jobId={}", correlationId, jobId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                    "status", "ERROR",
-                    "message", "Failed to retrieve job status.",
-                    "correlationId", correlationId
-            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to retrieve batch job status", e);
         }
     }
 
@@ -125,14 +115,8 @@ public class BatchReportController {
                     "message", e.getMessage()
             ));
 
-        } catch (Exception e) {
-            String correlationId = UUID.randomUUID().toString();
-            log.error("[{}] Failed to cancel job={}", correlationId, jobId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                    "status", "ERROR",
-                    "message", "Failed to cancel job.",
-                    "correlationId", correlationId
-            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to cancel batch job", e);
         }
     }
 
@@ -203,17 +187,13 @@ public class BatchReportController {
             ));
 
         } catch (ValidationException e) {
-            log.warn("[{}] Validation error in generate-all-branches: {}", correlationId, e.getMessage());
+            log.warn("All-branches request validation failed: correlationId={} jobId={} templateId={}",
+                    correlationId, "N/A", request.get("templateId"), e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR", "message", e.getMessage()));
 
-        } catch (Exception e) {
-            log.error("[{}] Failed to generate all branch reports", correlationId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
-                    "status", "ERROR",
-                    "message", "Failed to submit batch job. Please contact support.",
-                    "correlationId", correlationId
-            ));
+        } catch (RuntimeException e) {
+            throw new InfrastructureException("Failed to generate all-branch batch reports", e);
         }
     }
 
