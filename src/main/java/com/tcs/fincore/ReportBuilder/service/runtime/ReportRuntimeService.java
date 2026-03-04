@@ -1,5 +1,3 @@
-
-
 package com.tcs.fincore.ReportBuilder.service.runtime;
 
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
@@ -25,8 +23,7 @@ import java.util.stream.Collectors;
 public class ReportRuntimeService {
 
     private final GlobalParamEngine globalParamEngine;
-
-    // ... (prepareRuntimeContext remains same) ...
+    
     public void prepareRuntimeContext(
             ReportTemplate template,
             ReportVariant variant,
@@ -63,13 +60,12 @@ public class ReportRuntimeService {
         Map<String, Object> batchContext = new HashMap<>(commonParams != null ? commonParams : Map.of());
         batchContext = buildBatchGlobalContext(template, batchContext, varyingParamName);
 
-        // --- FIX START: Inject Varying Dimension Placeholder FIRST ---
+        // ---  Inject Varying Dimension Placeholder FIRST ---
         if (varyingParamName != null) {
             // Force the placeholder, overwriting any nulls/defaults
             batchContext.put(varyingParamName, "BATCH_VAR_PLACEHOLDER");
             log.debug("Injected BATCH_VAR_PLACEHOLDER for '{}'", varyingParamName);
         }
-        // --- FIX END ---
 
         // Inject placeholders for OTHER missing globals to prevent resolution errors
         if (template.getGlobalParams() != null) {
@@ -78,7 +74,7 @@ public class ReportRuntimeService {
 //                    batchContext.put(def.getName(), "0");
 //                    log.debug("Injected safety placeholder '0' for skipped global '{}'", def.getName());
 
-                    // FIXED: If we have pre-fetched values, inject the whole COLLECTION.
+                    //  If we have pre-fetched values, inject the whole COLLECTION.
                     // This forces QueryPatternAnalyzer to create an IN clause (Bulk Filter).
                     if (preFetchedGlobals != null && preFetchedGlobals.containsKey(def.getName())) {
                         Collection<Object> distinctValues = new HashSet<>(preFetchedGlobals.get(def.getName()).values());
@@ -371,7 +367,6 @@ public class ReportRuntimeService {
     private boolean isRuleApplicable(FilterRule r, String table, boolean dynamicRow) {
         String st = r.getScopeType() == null ? "ALL_DB" : r.getScopeType().toUpperCase(Locale.ROOT);
         String sv = r.getScopeValue();
-//        log.info("scope and value ::: {} {}", st, sv);
         return switch (st) {
             case "ALL_DB" -> true;
             case "TABLE" -> table != null && table.equalsIgnoreCase(sv);
