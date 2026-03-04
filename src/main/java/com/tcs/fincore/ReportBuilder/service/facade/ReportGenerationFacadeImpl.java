@@ -1,9 +1,6 @@
-
-
-
-
 package com.tcs.fincore.ReportBuilder.service.facade;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ReportProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
@@ -206,10 +203,12 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
         try {
             byte[] bytes = objectMapper.writeValueAsBytes(original);
             return objectMapper.readValue(bytes, ReportTemplate.class);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | JsonProcessingException e) {
             log.error("Deep copy failed for template {}: {}",
                     original.getReportMeta().getReportId(), e.getClass().getSimpleName());
             throw new ReportProcessingException("Failed to prepare report template for execution.", e);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
