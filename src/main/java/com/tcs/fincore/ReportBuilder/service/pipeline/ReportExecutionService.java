@@ -59,6 +59,8 @@ public class ReportExecutionService {
             log.error("Pipeline execution failed: jobId={} templateId={} correlationId={} errorType={}",
                     "N/A", templateId, "N/A", ex.getClass().getSimpleName(), ex);
             throw new ReportProcessingException("Report generation pipeline failed", ex);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 }
