@@ -95,9 +95,13 @@ public class BatchJobOrchestrator {
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
 
+    @Value("${report.batch.status.persist-interval-ms:1000}")
+    private long statusPersistIntervalMs;
+
 
     private final ConcurrentHashMap<String, AtomicBoolean> cancellationTokens = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<Future<?>>> jobFutures = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicLong> lastStatusPersistTimes = new ConcurrentHashMap<>();
 
     /**
      * Per-job execution context store.
@@ -190,7 +194,7 @@ public class BatchJobOrchestrator {
         validateRequest(request);
 
         BatchJobStatus status = createInitialStatus(request);
-        persistStatus(status);
+        persistStatus(status, true);
 
         cancellationTokens.put(request.getJobId(), new AtomicBoolean(false));
         jobFutures.put(request.getJobId(), Collections.synchronizedList(new ArrayList<>()));
@@ -223,7 +227,7 @@ public class BatchJobOrchestrator {
             status.setStatus(BatchJobStatus.JobState.CANCELLED);
             status.setCurrentPhase(BatchJobStatus.JobPhase.CANCELLED);
             status.setCompletionTime(LocalDateTime.now());
-            persistStatus(status);
+            persistStatus(status, true);
             log.info("Job {} cancelled", jobId);
         }
     }
@@ -237,6 +241,7 @@ public class BatchJobOrchestrator {
         String jobId = request.getJobId();
         BatchJobStatus status = batchJobStatusStore.find(jobId)
                 .orElseThrow(() -> new ValidationException("Job not found: " + jobId));
+        ensureThreadSafeStatusCollections(status);
         AtomicBoolean cancelled = cancellationTokens.get(jobId);
         ReportExecutionContext context = executionContexts.getOrDefault(
                 jobId, ReportExecutionContext.fromRest());
@@ -248,7 +253,7 @@ public class BatchJobOrchestrator {
             log.info("=== BATCH JOB STARTED: {} (trigger={}) ===", jobId, context.getTriggerSource());
             status.setStatus(BatchJobStatus.JobState.RUNNING);
             status.setStartTime(LocalDateTime.now());
-            persistStatus(status);
+            persistStatus(status, true);
 
             // -- Publish STARTED event (Kafka-triggered jobs only) ---------------
             eventPublisher.publishBatchStarted(context, status);
@@ -274,7 +279,7 @@ public class BatchJobOrchestrator {
                 updatePhase(status, BatchJobStatus.JobPhase.COMPLETED);
                 status.setStatus(BatchJobStatus.JobState.COMPLETED);
                 status.setCompletionTime(LocalDateTime.now());
-                persistStatus(status);
+                persistStatus(status, true);
                 log.info("=== BATCH JOB COMPLETED: {} ===", jobId);
                 logJobSummary(status);
 
@@ -289,7 +294,7 @@ public class BatchJobOrchestrator {
             status.setCompletionTime(LocalDateTime.now());
             status.getErrors().setLastErrorMessage(e.getMessage());
             status.getErrors().setLastErrorTime(LocalDateTime.now());
-            persistStatus(status);
+            persistStatus(status, true);
 
             // -- Publish FAILED event (Kafka-triggered jobs only) -----------------
             eventPublisher.publishBatchTerminal(context, status, jobStartInstant);
@@ -300,6 +305,7 @@ public class BatchJobOrchestrator {
             cancellationTokens.remove(jobId);
             jobFutures.remove(jobId);
             executionContexts.remove(jobId);
+            lastStatusPersistTimes.remove(jobId);
         }
     }
 
@@ -444,14 +450,19 @@ public class BatchJobOrchestrator {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
                         generateSingleReport(request, analysis, dimensionValue);
-                        int done = completedCount.incrementAndGet();
-                        status.getProgress().getCompletedValues().add(dimensionValue);
+                        int done;
+                        synchronized (status.getProgress()) {
+                            status.getProgress().getCompletedValues().add(dimensionValue);
+                            done = completedCount.incrementAndGet();
+                        }
                         updateProgress(status, done);
                     } catch (Exception e) {
                         log.error("Failed to generate report for {}: {}", dimensionValue, e.getMessage(), e);
-                        status.getProgress().getFailedValues().add(dimensionValue);
-                        status.getProgress().setFailedReports(
-                                status.getProgress().getFailedReports() + 1);
+                        synchronized (status.getProgress()) {
+                            status.getProgress().getFailedValues().add(dimensionValue);
+                            status.getProgress().setFailedReports(
+                                    status.getProgress().getFailedReports() + 1);
+                        }
                         recordError(status, dimensionValue, e);
                         persistStatus(status);
                     }
@@ -480,7 +491,7 @@ public class BatchJobOrchestrator {
         int completed = completedCount.get();
         if (failed > 0 && completed > 0) {
             status.setStatus(BatchJobStatus.JobState.PARTIALLY_COMPLETED);
-            persistStatus(status);
+            persistStatus(status, true);
         }
     }
 
@@ -579,22 +590,24 @@ public class BatchJobOrchestrator {
     // -------------------------------------------------------------------------
 
     private void updateProgress(BatchJobStatus status, int completed) {
-        status.getProgress().setCompletedReports(completed);
-        int total = status.getProgress().getTotalReports();
-        if (total > 0) {
-            status.getProgress().setPercentageComplete((completed * 100.0) / total);
-        }
+        synchronized (status.getProgress()) {
+            status.getProgress().setCompletedReports(completed);
+            int total = status.getProgress().getTotalReports();
+            if (total > 0) {
+                status.getProgress().setPercentageComplete((completed * 100.0) / total);
+            }
 
-        if (completed > 0 && status.getBatchProcessStartTime() != null) {
-            long elapsedSeconds = Duration.between(
-                    status.getBatchProcessStartTime(), LocalDateTime.now()).getSeconds();
-            if (elapsedSeconds > 0) {
-                double reportsPerSecond = (double) completed / elapsedSeconds;
-                status.getProgress().setReportsPerMinute((long) (reportsPerSecond * 60));
-                status.getProgress().setAverageReportTimeMs((elapsedSeconds * 1000L) / completed);
-                int remaining = total - completed;
-                if (reportsPerSecond > 0) {
-                    status.setEstimatedTimeRemainingSeconds((long) (remaining / reportsPerSecond));
+            if (completed > 0 && status.getBatchProcessStartTime() != null) {
+                long elapsedSeconds = Duration.between(
+                        status.getBatchProcessStartTime(), LocalDateTime.now()).getSeconds();
+                if (elapsedSeconds > 0) {
+                    double reportsPerSecond = (double) completed / elapsedSeconds;
+                    status.getProgress().setReportsPerMinute((long) (reportsPerSecond * 60));
+                    status.getProgress().setAverageReportTimeMs((elapsedSeconds * 1000L) / completed);
+                    int remaining = total - completed;
+                    if (reportsPerSecond > 0) {
+                        status.setEstimatedTimeRemainingSeconds((long) (remaining / reportsPerSecond));
+                    }
                 }
             }
         }
@@ -687,7 +700,7 @@ public class BatchJobOrchestrator {
                         ? status.getStartTime().toInstant(ZoneOffset.UTC) : Instant.now());
 
         log.info("Job {} stopped — cancelled flag was set", jobId);
-        persistStatus(status);
+        persistStatus(status, true);
     }
 
     private String generateJobId(BatchJobRequest request) {
@@ -720,12 +733,52 @@ public class BatchJobOrchestrator {
     private void updatePhase(BatchJobStatus status, BatchJobStatus.JobPhase phase) {
         status.setCurrentPhase(phase);
         status.setLastUpdateTime(LocalDateTime.now());
-        persistStatus(status);
+        persistStatus(status, true);
         log.info("Job {} entering phase: {}", status.getJobId(), phase);
     }
 
     private void persistStatus(BatchJobStatus status) {
+        persistStatus(status, false);
+    }
+
+    private void persistStatus(BatchJobStatus status, boolean force) {
+        String jobId = status.getJobId();
+        long now = System.currentTimeMillis();
+        AtomicLong lastPersist = lastStatusPersistTimes.computeIfAbsent(jobId, key -> new AtomicLong(0));
+        if (!force && statusPersistIntervalMs > 0) {
+            long previous = lastPersist.get();
+            if (now - previous < statusPersistIntervalMs) {
+                return;
+            }
+        }
         batchJobStatusStore.save(status, Duration.ofMinutes(statusTtlMinutes));
+        lastPersist.set(now);
+    }
+
+    private void ensureThreadSafeStatusCollections(BatchJobStatus status) {
+        if (status == null || status.getProgress() == null) {
+            return;
+        }
+        BatchJobStatus.ProgressInfo progress = status.getProgress();
+        synchronized (progress) {
+            Set<String> completedValues = progress.getCompletedValues();
+            if (completedValues == null) {
+                progress.setCompletedValues(ConcurrentHashMap.newKeySet());
+            } else if (!(completedValues instanceof ConcurrentHashMap.KeySetView)) {
+                Set<String> threadSafeCompleted = ConcurrentHashMap.newKeySet();
+                threadSafeCompleted.addAll(completedValues);
+                progress.setCompletedValues(threadSafeCompleted);
+            }
+
+            Set<String> failedValues = progress.getFailedValues();
+            if (failedValues == null) {
+                progress.setFailedValues(ConcurrentHashMap.newKeySet());
+            } else if (!(failedValues instanceof ConcurrentHashMap.KeySetView)) {
+                Set<String> threadSafeFailed = ConcurrentHashMap.newKeySet();
+                threadSafeFailed.addAll(failedValues);
+                progress.setFailedValues(threadSafeFailed);
+            }
+        }
     }
 
     private Path createHdfsDirectory(String basePath, LocalDate date,
