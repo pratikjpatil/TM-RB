@@ -26,6 +26,11 @@ public class RedisBatchResultStore implements BatchResultStore {
     private static final String PATTERN_INDEX = "rb:batch:%s:patterns";
     private static final String DATA_KEY = "rb:batch:%s:%s:%s";
     private static final int DEFAULT_MAX_RETRIES = 2;
+    private static final String NULL_PREFIX = "NUL:";
+    private static final String NUMBER_PREFIX = "NUM:";
+    private static final String BOOLEAN_PREFIX = "BOOL:";
+    private static final String STRING_PREFIX = "STR:";
+    private static final String JSON_PREFIX = "JSON:";
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -163,24 +168,76 @@ public class RedisBatchResultStore implements BatchResultStore {
 
     private String serializeValue(Object value) {
         if (value == null) {
-            return "null";
+            return NULL_PREFIX;
         }
-        if (value instanceof Number || value instanceof Boolean) {
-            return String.valueOf(value);
+        if (value instanceof Number) {
+            return NUMBER_PREFIX + value;
+        }
+        if (value instanceof Boolean) {
+            return BOOLEAN_PREFIX + value;
+        }
+        if (value instanceof String str) {
+            return STRING_PREFIX + str;
         }
 
         try {
-            return objectMapper.writeValueAsString(value);
+            return JSON_PREFIX + objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize batch value", e);
         }
     }
 
     private Object deserializeValue(String value) {
+        if (value == null || value.startsWith(NULL_PREFIX)) {
+            return null;
+        }
+        if (value.startsWith(NUMBER_PREFIX)) {
+            return parseNumber(value.substring(NUMBER_PREFIX.length()));
+        }
+        if (value.startsWith(BOOLEAN_PREFIX)) {
+            return Boolean.parseBoolean(value.substring(BOOLEAN_PREFIX.length()));
+        }
+        if (value.startsWith(STRING_PREFIX)) {
+            return value.substring(STRING_PREFIX.length());
+        }
+        if (value.startsWith(JSON_PREFIX)) {
+            return deserializeJsonValue(value.substring(JSON_PREFIX.length()));
+        }
+
+        // Backward compatibility with older jobs that stored raw values.
+        if ("null".equalsIgnoreCase(value)) {
+            return null;
+        }
+        Object parsedLegacyNumber = parseNumber(value);
+        if (parsedLegacyNumber != null) {
+            return parsedLegacyNumber;
+        }
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
+            return Boolean.parseBoolean(value);
+        }
+
+        return deserializeJsonValue(value);
+    }
+
+    private Object deserializeJsonValue(String value) {
         try {
             return objectMapper.readValue(value, Object.class);
         } catch (JsonProcessingException e) {
             return value;
+        }
+    }
+
+    private Number parseNumber(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            if (value.indexOf('.') >= 0 || value.indexOf('e') >= 0 || value.indexOf('E') >= 0) {
+                return Double.parseDouble(value);
+            }
+            return Long.parseLong(value);
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 }
