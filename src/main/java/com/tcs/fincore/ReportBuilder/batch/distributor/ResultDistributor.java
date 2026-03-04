@@ -1,6 +1,3 @@
-
-
-
 package com.tcs.fincore.ReportBuilder.batch.distributor;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
@@ -22,17 +19,8 @@ public class ResultDistributor {
 
     private final Map<String, JobDistributionContext> jobContexts = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public void initialize(
-            String jobId,
-            List<QueryPattern> patterns,
-            Map<String, Map<String, Object>> preFetchedGlobals,
-            ReportTemplate template
-    ) {
-        jobContexts.put(jobId, new JobDistributionContext(
-                buildSpecToPatternMap(patterns),
-                preFetchedGlobals,
-                buildColumnMap(template)
-        ));
+    public void initialize(String jobId, List<QueryPattern> patterns, Map<String, Map<String, Object>> preFetchedGlobals, ReportTemplate template) {
+        jobContexts.put(jobId, new JobDistributionContext(buildSpecToPatternMap(patterns), preFetchedGlobals, buildColumnMap(template)));
     }
 
     private Map<String, String> buildColumnMap(ReportTemplate template) {
@@ -76,8 +64,7 @@ public class ResultDistributor {
         return results;
     }
 
-    private Object extractValueForSpec(String jobId, String dimensionValue, DataSourceSpec spec,
-                                       JobDistributionContext context) {
+    private Object extractValueForSpec(String jobId, String dimensionValue, DataSourceSpec spec, JobDistributionContext context) {
         QueryPattern pattern = context.specToPatternMap().get(spec.getSpecId());
         if (pattern == null) return "FALLBACK";
 
@@ -101,8 +88,7 @@ public class ResultDistributor {
      * FIXED: Returns a LIST of keys to look up.
      * Handles Indirection (Global Params) and Standard Bulk Filters.
      */
-    private List<String> resolveBulkKeys(DataSourceSpec spec, String dimensionValue, QueryPattern pattern,
-                                         JobDistributionContext context) {
+    private List<String> resolveBulkKeys(DataSourceSpec spec, String dimensionValue, QueryPattern pattern, JobDistributionContext context) {
         // A. check if this column is driven by a Global Param (Indirection)
         String globalParamName = context.columnToGlobalMap().get(spec.getColumn());
         if (globalParamName != null && context.preFetchedGlobals() != null) {
@@ -233,10 +219,10 @@ public class ResultDistributor {
             return sum;
         } else if (type == DataSourceSpec.Type.DB_MAX) {
             // Logic for Max
-            return values.stream().map(v -> (Comparable)v).max(Comparator.naturalOrder()).orElse(null);
+            return values.stream().map(v -> (Comparable) v).max(Comparator.naturalOrder()).orElse(null);
         } else if (type == DataSourceSpec.Type.DB_MIN) {
             // Logic for Min
-            return values.stream().map(v -> (Comparable)v).min(Comparator.naturalOrder()).orElse(null);
+            return values.stream().map(v -> (Comparable) v).min(Comparator.naturalOrder()).orElse(null);
         }
 
         // For DB_VALUE or TEXT, we generally return the first match.
@@ -248,11 +234,9 @@ public class ResultDistributor {
         jobContexts.remove(jobId);
     }
 
-    private record JobDistributionContext(
-            Map<String, QueryPattern> specToPatternMap,
-            Map<String, Map<String, Object>> preFetchedGlobals,
-            Map<String, String> columnToGlobalMap
-    ) {
+    private record JobDistributionContext(Map<String, QueryPattern> specToPatternMap,
+                                          Map<String, Map<String, Object>> preFetchedGlobals,
+                                          Map<String, String> columnToGlobalMap) {
     }
 
     private Object getDefaultValue(DataSourceSpec.Type type) {
