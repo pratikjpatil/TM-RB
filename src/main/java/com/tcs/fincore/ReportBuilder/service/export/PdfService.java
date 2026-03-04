@@ -70,6 +70,8 @@ public class PdfService implements ReportExporter {
         } catch (RuntimeException e) {
             log.error("Failed to load logo from {}: {}", path, e.getMessage());
             return null;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
