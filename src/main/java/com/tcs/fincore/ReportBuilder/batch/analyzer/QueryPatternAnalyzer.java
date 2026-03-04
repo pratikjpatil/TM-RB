@@ -15,7 +15,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * FIXED: Advanced pattern analysis supporting Multiple Operators and Automatic Global Param detection.
+ * Advanced pattern analysis supporting Multiple Operators and Automatic Global Param detection.
  */
 @Slf4j
 @Component
@@ -186,7 +186,7 @@ public class QueryPatternAnalyzer {
         // Collect all spec IDs
         specs.forEach(s -> pattern.getSourceSpecIds().add(s.getSpecId()));
 
-        // --- FIXED: Automatic Column Detection for Varying Dimension ---
+        // --- Automatic Column Detection for Varying Dimension ---
         if (batchRequest.getVaryingDimension() != null) {
             String paramName = batchRequest.getVaryingDimension().getParamName();
             String foundDbColumn = null;
@@ -203,7 +203,7 @@ public class QueryPatternAnalyzer {
                 }
             }
 
-            // Strategy 2: Fallback to Variant Rules (Legacy/Implicit Strategy)
+            // Strategy 2: Fallback to Variant Rules (Implicit Strategy)
             if (foundDbColumn == null) {
                 foundDbColumn = resolveDbColumnFromVariant(variant, paramName, first.getTable());
                 if (foundDbColumn != null) {
