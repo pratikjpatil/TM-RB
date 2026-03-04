@@ -18,7 +18,7 @@ public class ResultDistributor {
 
     private final BatchResultStore batchResultStore;
 
-    @Value("${report.batch.distribution.cache.max-entries-per-job:50000}")
+    @Value("${report.batch.distribution.cache.max-entries-per-job:${report.batch.distribution.cache-size:50000}}")
     private int maxCacheEntriesPerJob;
 
     private final Map<String, JobDistributionContext> jobContexts = new java.util.concurrent.ConcurrentHashMap<>();
@@ -48,48 +48,59 @@ public class ResultDistributor {
         if (context == null) throw new IllegalStateException("Job context not initialized for " + jobId);
         Map<String, Object> results = new HashMap<>();
 
+        Map<QueryPattern, List<DataSourceSpec>> groupedSpecs = new LinkedHashMap<>();
+        for (DataSourceSpec spec : specs) {
+            QueryPattern pattern = context.specToPatternMap().get(spec.getSpecId());
+            if (pattern == null) {
+                results.put(spec.getSpecId(), "FALLBACK");
+            } else {
+                groupedSpecs.computeIfAbsent(pattern, ignored -> new ArrayList<>()).add(spec);
+            }
+        }
+
+        for (Map.Entry<QueryPattern, List<DataSourceSpec>> entry : groupedSpecs.entrySet()) {
+            populatePatternResults(jobId, dimensionValue, entry.getKey(), entry.getValue(), context, results);
+        }
+
+        return results;
+    }
+
+    private void populatePatternResults(String jobId,
+                                        String dimensionValue,
+                                        QueryPattern pattern,
+                                        List<DataSourceSpec> specs,
+                                        JobDistributionContext context,
+                                        Map<String, Object> results) {
+        if (!context.isPatternAvailable(jobId, pattern.getPatternId(), batchResultStore)) {
+            for (DataSourceSpec spec : specs) {
+                results.put(spec.getSpecId(), "FALLBACK");
+            }
+            return;
+        }
+
+        Map<String, List<String>> keysBySpecId = new HashMap<>();
+        Set<String> unionKeys = new LinkedHashSet<>();
+        for (DataSourceSpec spec : specs) {
+            List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern, context);
+            keysBySpecId.put(spec.getSpecId(), bulkKeys);
+            unionKeys.addAll(bulkKeys);
+        }
+
+        Map<String, Object> data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), dimensionValue, unionKeys);
+        if (data.isEmpty() && !"DEFAULT".equals(dimensionValue)) {
+            data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), "DEFAULT", unionKeys);
+        }
+
         for (DataSourceSpec spec : specs) {
             try {
-                Object val = extractValueForSpec(jobId, dimensionValue, spec, context);
-                if (val != null && !"FALLBACK".equals(val)) {
-                    results.put(spec.getSpecId(), val);
-                } else {
-                    // Logic for fallback: If explicitly FALLBACK, we skip putting it here so AggregatorService handles it.
-                    // However, if we want to force 0.00 instead of fallback for batch misses:
-                    if ("FALLBACK".equals(val)) {
-                        // Mark for fallback or return default based on strictness policy.
-                        // Returning "FALLBACK" string allows orchestrator to query individually.
-                        results.put(spec.getSpecId(), "FALLBACK");
-                    } else {
-                        results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
-                    }
-                }
+                List<String> bulkKeys = keysBySpecId.getOrDefault(spec.getSpecId(), Collections.emptyList());
+                Object value = data.isEmpty() ? getDefaultValue(spec.getType()) : aggregateValues(data, bulkKeys, spec.getType());
+                results.put(spec.getSpecId(), value != null ? value : getDefaultValue(spec.getType()));
             } catch (RuntimeException e) {
                 log.error("Distributor error for spec {}: {}", spec.getSpecId(), e.getMessage());
                 results.put(spec.getSpecId(), getDefaultValue(spec.getType()));
             }
         }
-        return results;
-    }
-
-    private Object extractValueForSpec(String jobId, String dimensionValue, DataSourceSpec spec, JobDistributionContext context) {
-        QueryPattern pattern = context.specToPatternMap().get(spec.getSpecId());
-        if (pattern == null) return "FALLBACK";
-
-        if (!context.isPatternAvailable(jobId, pattern.getPatternId(), batchResultStore)) return "FALLBACK";
-
-        // 1. Resolve Keys
-        List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern, context);
-        Set<String> keySet = new LinkedHashSet<>(bulkKeys);
-        Map<String, Object> data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), dimensionValue, keySet);
-        if (data.isEmpty()) {
-            data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), "DEFAULT", keySet);
-        }
-
-        if (data.isEmpty()) return getDefaultValue(spec.getType());
-
-        // 4. Aggregate values for all matched keys
-        return aggregateValues(data, bulkKeys, spec.getType());
     }
 
     /**

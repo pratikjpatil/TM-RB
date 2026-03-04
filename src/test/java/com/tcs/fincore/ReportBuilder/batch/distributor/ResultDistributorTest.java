@@ -108,6 +108,42 @@ class ResultDistributorTest {
         assertEquals(2, countingStore.fetchValuesCalls.get(), "dimension + DEFAULT fallback should be cached after first lookup");
     }
 
+    @Test
+    void shouldFetchRedisOncePerPatternAndDimensionForMultipleSpecs() {
+        String jobId = "job-grouped";
+        String patternId = "p-grouped";
+
+        CountingBatchResultStore countingStore = new CountingBatchResultStore();
+        ResultDistributor cachedDistributor = new ResultDistributor(countingStore);
+
+        countingStore.initializeJob(jobId, Duration.ofMinutes(5));
+        countingStore.storeValue(jobId, patternId, "D1", "B1", 11.0);
+        countingStore.storeValue(jobId, patternId, "D1", "B2", 22.0);
+        countingStore.markPatternAvailable(jobId, patternId);
+
+        QueryPattern pattern = QueryPattern.builder()
+                .patternId(patternId)
+                .sourceSpecIds(Set.of("s1", "s2"))
+                .bulkFilters(Map.of("BRANCH", Set.of("B1", "B2")))
+                .build();
+        cachedDistributor.initialize(jobId, List.of(pattern), null, new ReportTemplate());
+
+        DataSourceSpec spec1 = new DataSourceSpec("s1", DataSourceSpec.Type.DB_SUM,
+                "T1", "AMOUNT", Map.of("BRANCH", Map.of("op", "=", "value", "B1")), "");
+        DataSourceSpec spec2 = new DataSourceSpec("s2", DataSourceSpec.Type.DB_SUM,
+                "T1", "AMOUNT", Map.of("BRANCH", Map.of("op", "=", "value", "B2")), "");
+
+        Map<String, Object> result = cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec1, spec2));
+
+        assertEquals(11.0, result.get("s1"));
+        assertEquals(22.0, result.get("s2"));
+        assertEquals(1, countingStore.hasPatternCalls.get(), "pattern availability should be checked once per pattern");
+        assertEquals(1, countingStore.fetchValuesCalls.get(), "store should be fetched once for grouped specs");
+
+        cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec1, spec2));
+        assertEquals(1, countingStore.fetchValuesCalls.get(), "subsequent calls should hit in-memory fetch cache");
+    }
+
     private static class CountingBatchResultStore implements BatchResultStore {
         private final InMemoryBatchResultStore delegate = new InMemoryBatchResultStore();
         private final AtomicInteger hasPatternCalls = new AtomicInteger();
