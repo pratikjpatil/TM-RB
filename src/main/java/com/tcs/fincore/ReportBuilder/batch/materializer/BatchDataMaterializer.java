@@ -1,8 +1,3 @@
-
-
-
-
-
 package com.tcs.fincore.ReportBuilder.batch.materializer;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
@@ -30,7 +25,6 @@ public class BatchDataMaterializer {
     private final NamedParameterJdbcTemplate jdbc;
     private final BatchResultStore batchResultStore;
 
-    // FIX #7: read from application.properties instead of hardcoded 3
     @Value("${report.batch.materialization.parallel-threads:3}")
     private int parallelThreads;
 
@@ -40,7 +34,7 @@ public class BatchDataMaterializer {
     @Value("${report.batch.materialization.redis.flush-interval-ms:250}")
     private long redisFlushIntervalMs;
 
-    // FIX #7: not final — created in @PostConstruct after @Value injection
+    //not final — created in @PostConstruct after @Value injection
     private ExecutorService materializationExecutor;
 
     public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc, BatchResultStore batchResultStore) {
@@ -50,18 +44,15 @@ public class BatchDataMaterializer {
 
     @PostConstruct
     public void init() {
-        this.materializationExecutor = Executors.newFixedThreadPool(
-                parallelThreads,
-                r -> {
-                    Thread t = new Thread(r, "materializer-" + r.hashCode());
-                    t.setDaemon(true);
-                    return t;
-                }
-        );
+        this.materializationExecutor = Executors.newFixedThreadPool(parallelThreads, r -> {
+            Thread t = new Thread(r, "materializer-" + r.hashCode());
+            t.setDaemon(true);
+            return t;
+        });
         log.info("BatchDataMaterializer initialized with {} parallel threads", parallelThreads);
     }
 
-    // FIX #7: Executor is shut down gracefully — no thread leaks on redeploy.
+    // Executor is shut down gracefully — no thread leaks on redeploy.
     @PreDestroy
     public void destroy() {
         log.info("Shutting down materializationExecutor...");
@@ -77,10 +68,8 @@ public class BatchDataMaterializer {
         }
     }
 
-    // -----------------------------------------------------------------------
 
-    public void materializeAll(String jobId, List<QueryPattern> patterns, long timeoutMinutes,
-                               LongConsumer rowProgressConsumer) {
+    public void materializeAll(String jobId, List<QueryPattern> patterns, long timeoutMinutes, LongConsumer rowProgressConsumer) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (QueryPattern pattern : patterns) {
@@ -89,8 +78,7 @@ public class BatchDataMaterializer {
                     materializePattern(jobId, pattern, rowProgressConsumer);
                     batchResultStore.markPatternAvailable(jobId, pattern.getPatternId());
                 } catch (RuntimeException e) {
-                    log.error("Failed to materialize pattern {}: {}",
-                            pattern.getPatternId(), e.getMessage(), e);
+                    log.error("Failed to materialize pattern {}: {}", pattern.getPatternId(), e.getMessage(), e);
                     // Re-throw so allOf tracks failure explicitly
                     throw new CompletionException(e);
                 }
@@ -100,20 +88,16 @@ public class BatchDataMaterializer {
 
         // Wait with timeout; failed patterns are already stored as empty maps above.
         try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .get(timeoutMinutes, TimeUnit.MINUTES);
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(timeoutMinutes, TimeUnit.MINUTES);
         } catch (TimeoutException te) {
-            log.error("Materialization timed out after {}m — {} patterns may be incomplete",
-                    timeoutMinutes, patterns.size());
+            log.error("Materialization timed out after {}m — {} patterns may be incomplete", timeoutMinutes, patterns.size());
             futures.forEach(f -> f.cancel(true));
-            throw new ValidationException("Data materialization timed out after "
-                    + timeoutMinutes + " minutes", te);
+            throw new ValidationException("Data materialization timed out after " + timeoutMinutes + " minutes", te);
         } catch (ExecutionException ee) {
             // Individual pattern failures are already logged above and stored as empty maps.
             // Log aggregate summary but do NOT abort the whole batch.
             long failedCount = futures.stream().filter(CompletableFuture::isCompletedExceptionally).count();
-            log.warn("{} of {} patterns failed materialization — affected specs will use fallback queries",
-                    failedCount, patterns.size());
+            log.warn("{} of {} patterns failed materialization — affected specs will use fallback queries", failedCount, patterns.size());
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             throw new ValidationException("Data materialization interrupted", ie);
@@ -121,18 +105,14 @@ public class BatchDataMaterializer {
 
     }
 
-    // -----------------------------------------------------------------------
 
-    private void materializePattern(String jobId, QueryPattern pattern,
-                                    LongConsumer rowProgressConsumer) {
+    private void materializePattern(String jobId, QueryPattern pattern, LongConsumer rowProgressConsumer) {
         long start = System.currentTimeMillis();
         int rows = executeAndStore(pattern, jobId, rowProgressConsumer);
-        log.debug("Materialized pattern {} in {}ms ({} rows)",
-                pattern.getPatternId(), System.currentTimeMillis() - start, rows);
+        log.debug("Materialized pattern {} in {}ms ({} rows)", pattern.getPatternId(), System.currentTimeMillis() - start, rows);
     }
 
-    private int executeAndStore(QueryPattern pattern, String jobId,
-                                LongConsumer rowProgressConsumer) {
+    private int executeAndStore(QueryPattern pattern, String jobId, LongConsumer rowProgressConsumer) {
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT /*+ PARALLEL(8) */ ");
 
@@ -171,10 +151,8 @@ public class BatchDataMaterializer {
         }
 
         log.debug("Pattern {} SQL: {} | params: {}", pattern.getPatternId(), sql, params);
-        String dimColumn = pattern.getVaryingDimension() != null
-                ? pattern.getVaryingDimension().getColumnName() : null;
-        Set<String> bulkColumns = pattern.getBulkFilters() != null
-                ? pattern.getBulkFilters().keySet() : Collections.emptySet();
+        String dimColumn = pattern.getVaryingDimension() != null ? pattern.getVaryingDimension().getColumnName() : null;
+        Set<String> bulkColumns = pattern.getBulkFilters() != null ? pattern.getBulkFilters().keySet() : Collections.emptySet();
 
         AtomicInteger rowCount = new AtomicInteger();
         BufferedResultWriter writer = writer(jobId, pattern.getPatternId());
@@ -218,11 +196,7 @@ public class BatchDataMaterializer {
         }
 
         if (pattern.getVaryingDimension() != null) {
-            filters.put(pattern.getVaryingDimension().getColumnName(), Map.of(
-                    "op", "IN",
-                    "value", new ArrayList<>(pattern.getVaryingDimension().getAllValues()),
-                    "dataType", pattern.getVaryingDimension().getDataType()
-            ));
+            filters.put(pattern.getVaryingDimension().getColumnName(), Map.of("op", "IN", "value", new ArrayList<>(pattern.getVaryingDimension().getAllValues()), "dataType", pattern.getVaryingDimension().getDataType()));
         }
 
         if (pattern.getBulkFilters() != null) {
@@ -287,8 +261,7 @@ public class BatchDataMaterializer {
                 pendingIndexDataKeys.add(String.format("rb:batch:%s:%s:%s", jobId, patternId, dimensionValue));
             }
 
-            if (pendingWrites.size() >= flushSize ||
-                    System.currentTimeMillis() - lastFlushTs.get() >= flushIntervalMs) {
+            if (pendingWrites.size() >= flushSize || System.currentTimeMillis() - lastFlushTs.get() >= flushIntervalMs) {
                 flush(false);
             }
         }
@@ -301,9 +274,7 @@ public class BatchDataMaterializer {
                 return;
             }
 
-            batchResultStore.storeValues(jobId, patternId,
-                    new ArrayList<>(pendingWrites),
-                    new HashSet<>(pendingIndexDataKeys));
+            batchResultStore.storeValues(jobId, patternId, new ArrayList<>(pendingWrites), new HashSet<>(pendingIndexDataKeys));
             pendingWrites.clear();
             pendingIndexDataKeys.clear();
             lastFlushTs.set(System.currentTimeMillis());
