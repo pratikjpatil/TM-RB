@@ -66,7 +66,7 @@ public class BatchJobStatus {
         private double percentageComplete;
 
         // Materialization progress (row-level)
-        private long estimatedMaterializationRows;
+//        private long estimatedMaterializationRows;
         private long materializedRows;
 
         // Track completed dimension values (e.g., branch codes)
