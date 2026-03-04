@@ -9,7 +9,10 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 @ConditionalOnProperty(name = "report.batch.status-store", havingValue = "redis")
@@ -52,10 +55,73 @@ public class RedisBatchJobStatusStore implements BatchJobStatusStore {
 
     private String toJson(BatchJobStatus status) {
         try {
-            return objectMapper.writeValueAsString(status);
+            return objectMapper.writeValueAsString(snapshot(status));
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize batch job status", e);
         }
+    }
+
+    private BatchJobStatus snapshot(BatchJobStatus status) {
+        BatchJobStatus.ProgressInfo progress = status.getProgress();
+        BatchJobStatus.ErrorInfo errors = status.getErrors();
+
+        BatchJobStatus.ProgressInfo progressSnapshot;
+        if (progress == null) {
+            progressSnapshot = null;
+        } else {
+            synchronized (progress) {
+                Set<String> completedValues = progress.getCompletedValues() == null
+                        ? Set.of()
+                        : new HashSet<>(progress.getCompletedValues());
+                Set<String> failedValues = progress.getFailedValues() == null
+                        ? Set.of()
+                        : new HashSet<>(progress.getFailedValues());
+
+                progressSnapshot = BatchJobStatus.ProgressInfo.builder()
+                        .totalReports(progress.getTotalReports())
+                        .completedReports(progress.getCompletedReports())
+                        .failedReports(progress.getFailedReports())
+                        .skippedReports(progress.getSkippedReports())
+                        .percentageComplete(progress.getPercentageComplete())
+                        .materializedRows(progress.getMaterializedRows())
+                        .completedValues(completedValues)
+                        .failedValues(failedValues)
+                        .reportsPerMinute(progress.getReportsPerMinute())
+                        .averageReportTimeMs(progress.getAverageReportTimeMs())
+                        .build();
+            }
+        }
+
+        BatchJobStatus.ErrorInfo errorSnapshot;
+        if (errors == null) {
+            errorSnapshot = null;
+        } else {
+            synchronized (errors) {
+                errorSnapshot = BatchJobStatus.ErrorInfo.builder()
+                        .totalErrors(errors.getTotalErrors())
+                        .recentErrors(errors.getRecentErrors() == null
+                                ? new ArrayList<>()
+                                : new ArrayList<>(errors.getRecentErrors()))
+                        .lastErrorMessage(errors.getLastErrorMessage())
+                        .lastErrorTime(errors.getLastErrorTime())
+                        .build();
+            }
+        }
+
+        return BatchJobStatus.builder()
+                .jobId(status.getJobId())
+                .templateId(status.getTemplateId())
+                .variantCode(status.getVariantCode())
+                .currentPhase(status.getCurrentPhase())
+                .status(status.getStatus())
+                .progress(progressSnapshot)
+                .errors(errorSnapshot)
+                .startTime(status.getStartTime())
+                .batchProcessStartTime(status.getBatchProcessStartTime())
+                .lastUpdateTime(status.getLastUpdateTime())
+                .completionTime(status.getCompletionTime())
+                .estimatedTimeRemainingSeconds(status.getEstimatedTimeRemainingSeconds())
+                .build();
     }
 
     private BatchJobStatus fromJson(String payload) {

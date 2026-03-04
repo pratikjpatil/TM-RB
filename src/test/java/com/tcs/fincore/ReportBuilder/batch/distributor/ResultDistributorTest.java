@@ -1,6 +1,7 @@
 package com.tcs.fincore.ReportBuilder.batch.distributor;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
+import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
 import com.tcs.fincore.ReportBuilder.batch.store.InMemoryBatchResultStore;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
@@ -11,6 +12,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -75,5 +77,72 @@ class ResultDistributorTest {
 
         assertEquals(10.0, resultA.get("s1"));
         assertEquals(20.0, resultB.get("s1"));
+    }
+
+    @Test
+    void shouldCachePatternAvailabilityAndFetchedValuesForRepeatedReads() {
+        String jobId = "job-cache";
+        String patternId = "p-cache";
+        String specId = "s-cache";
+
+        CountingBatchResultStore countingStore = new CountingBatchResultStore();
+        ResultDistributor cachedDistributor = new ResultDistributor(countingStore);
+
+        countingStore.initializeJob(jobId, Duration.ofMinutes(5));
+        countingStore.storeValue(jobId, patternId, "D1", "DEFAULT", 88.0);
+        countingStore.markPatternAvailable(jobId, patternId);
+
+        QueryPattern pattern = QueryPattern.builder()
+                .patternId(patternId)
+                .sourceSpecIds(Set.of(specId))
+                .build();
+        cachedDistributor.initialize(jobId, List.of(pattern), null, new ReportTemplate());
+
+        DataSourceSpec spec = new DataSourceSpec(specId, DataSourceSpec.Type.DB_SUM,
+                "T1", "AMOUNT", Map.of(), "");
+
+        cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec));
+        cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec));
+
+        assertEquals(1, countingStore.hasPatternCalls.get(), "pattern availability should be cached");
+        assertEquals(2, countingStore.fetchValuesCalls.get(), "dimension + DEFAULT fallback should be cached after first lookup");
+    }
+
+    private static class CountingBatchResultStore implements BatchResultStore {
+        private final InMemoryBatchResultStore delegate = new InMemoryBatchResultStore();
+        private final AtomicInteger hasPatternCalls = new AtomicInteger();
+        private final AtomicInteger fetchValuesCalls = new AtomicInteger();
+
+        @Override
+        public void initializeJob(String jobId, Duration ttl) {
+            delegate.initializeJob(jobId, ttl);
+        }
+
+        @Override
+        public void storeValue(String jobId, String patternId, String dimensionValue, String bulkKey, Object value) {
+            delegate.storeValue(jobId, patternId, dimensionValue, bulkKey, value);
+        }
+
+        @Override
+        public Map<String, Object> fetchValues(String jobId, String patternId, String dimensionValue, Set<String> keys) {
+            fetchValuesCalls.incrementAndGet();
+            return delegate.fetchValues(jobId, patternId, dimensionValue, keys);
+        }
+
+        @Override
+        public boolean hasPattern(String jobId, String patternId) {
+            hasPatternCalls.incrementAndGet();
+            return delegate.hasPattern(jobId, patternId);
+        }
+
+        @Override
+        public void markPatternAvailable(String jobId, String patternId) {
+            delegate.markPatternAvailable(jobId, patternId);
+        }
+
+        @Override
+        public void cleanupJob(String jobId) {
+            delegate.cleanupJob(jobId);
+        }
     }
 }
