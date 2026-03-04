@@ -48,8 +48,8 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
 
-    private static final List<String> ALLOWED_FORMATS = List.of("pdf", "xlsx", "csv", "psv");
-    private static final List<String> DEFAULT_FORMATS  = List.of("pdf", "xlsx", "psv");
+    private static final List<String> ALLOWED_FORMATS = List.of("pdf", "xlsx", "txt");
+    private static final List<String> DEFAULT_FORMATS  = List.of("pdf", "xlsx", "txt");
 
     // =========================================================================
     // Synchronous generation — REST only, no lifecycle events
