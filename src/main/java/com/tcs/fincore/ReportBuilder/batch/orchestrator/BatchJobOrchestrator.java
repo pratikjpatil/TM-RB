@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 package com.tcs.fincore.ReportBuilder.batch.orchestrator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -124,7 +117,7 @@ public class BatchJobOrchestrator {
                 com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
         reportGenerationExecutor = new ThreadPoolExecutor(
-                10, 20,
+                10, 60,
                 60L, TimeUnit.SECONDS,
                 new LinkedBlockingQueue<>(1000),
                 new ThreadPoolExecutor.CallerRunsPolicy()
@@ -311,7 +304,7 @@ public class BatchJobOrchestrator {
     }
 
     // -------------------------------------------------------------------------
-    // Phase 1: Template Analysis (unchanged)
+    // Phase 1: Template Analysis
     // -------------------------------------------------------------------------
 
     private AnalysisResult analyzeTemplate(BatchJobRequest request) {
@@ -370,19 +363,19 @@ public class BatchJobOrchestrator {
         long startTime = System.currentTimeMillis();
         BatchJobStatus status = batchJobStatusStore.find(jobId).orElse(null);
 
-        long estimatedRows = analysis.patterns.stream().mapToLong(QueryPattern::estimateResultSetSize).sum();
+//        long estimatedRows = analysis.patterns.stream().mapToLong(QueryPattern::estimateResultSetSize).sum();
         if (status != null) {
-            status.getProgress().setEstimatedMaterializationRows(estimatedRows);
+//            status.getProgress().setEstimatedMaterializationRows(estimatedRows);
             status.getProgress().setMaterializedRows(0L);
             status.setLastUpdateTime(LocalDateTime.now());
             persistStatus(status);
         }
 
-        if ("memory".equalsIgnoreCase(resultStoreType) && estimatedRows > maxInMemoryEstimatedRows) {
-            throw new ValidationException("Estimated materialized rows " + estimatedRows
-                    + " exceed in-memory threshold " + maxInMemoryEstimatedRows
-                    + ". Switch to Redis result store for large batch workloads.");
-        }
+//        if ("memory".equalsIgnoreCase(resultStoreType) && estimatedRows > maxInMemoryEstimatedRows) {
+//            throw new ValidationException("Estimated materialized rows " + estimatedRows
+//                    + " exceed in-memory threshold " + maxInMemoryEstimatedRows
+//                    + ". Switch to Redis result store for large batch workloads.");
+//        }
 
         batchResultStore.initializeJob(jobId, Duration.ofMinutes(statusTtlMinutes));
         AtomicLong pendingRows = new AtomicLong(0);
@@ -563,7 +556,7 @@ public class BatchJobOrchestrator {
         List<String> formats = request.getOutputFormats() != null
                 ? request.getOutputFormats() : List.of("pdf", "xlsx");
 
-        List<String> allowedFormats = List.of("pdf", "xlsx", "csv", "psv");
+        List<String> allowedFormats = List.of("pdf", "xlsx", "txt");
         for (String format : formats) {
             if (!allowedFormats.contains(format.toLowerCase())) {
                 log.warn("Unsupported output format requested: {}. Skipping.", format);
