@@ -6,6 +6,7 @@ import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,10 +18,17 @@ public class ResultDistributor {
 
     private final BatchResultStore batchResultStore;
 
+    @Value("${report.batch.distribution.cache.max-entries-per-job:50000}")
+    private int maxCacheEntriesPerJob;
+
     private final Map<String, JobDistributionContext> jobContexts = new java.util.concurrent.ConcurrentHashMap<>();
 
     public void initialize(String jobId, List<QueryPattern> patterns, Map<String, Map<String, Object>> preFetchedGlobals, ReportTemplate template) {
-        jobContexts.put(jobId, new JobDistributionContext(buildSpecToPatternMap(patterns), preFetchedGlobals, buildColumnMap(template)));
+        jobContexts.put(jobId, new JobDistributionContext(
+                buildSpecToPatternMap(patterns),
+                preFetchedGlobals,
+                buildColumnMap(template),
+                new ValueFetchCache(maxCacheEntriesPerJob)));
     }
 
     private Map<String, String> buildColumnMap(ReportTemplate template) {
@@ -68,14 +76,14 @@ public class ResultDistributor {
         QueryPattern pattern = context.specToPatternMap().get(spec.getSpecId());
         if (pattern == null) return "FALLBACK";
 
-        if (!batchResultStore.hasPattern(jobId, pattern.getPatternId())) return "FALLBACK";
+        if (!context.isPatternAvailable(jobId, pattern.getPatternId(), batchResultStore)) return "FALLBACK";
 
         // 1. Resolve Keys
         List<String> bulkKeys = resolveBulkKeys(spec, dimensionValue, pattern, context);
         Set<String> keySet = new LinkedHashSet<>(bulkKeys);
-        Map<String, Object> data = batchResultStore.fetchValues(jobId, pattern.getPatternId(), dimensionValue, keySet);
+        Map<String, Object> data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), dimensionValue, keySet);
         if (data.isEmpty()) {
-            data = batchResultStore.fetchValues(jobId, pattern.getPatternId(), "DEFAULT", keySet);
+            data = context.fetchValues(batchResultStore, jobId, pattern.getPatternId(), "DEFAULT", keySet);
         }
 
         if (data.isEmpty()) return getDefaultValue(spec.getType());
@@ -236,7 +244,75 @@ public class ResultDistributor {
 
     private record JobDistributionContext(Map<String, QueryPattern> specToPatternMap,
                                           Map<String, Map<String, Object>> preFetchedGlobals,
-                                          Map<String, String> columnToGlobalMap) {
+                                          Map<String, String> columnToGlobalMap,
+                                          ValueFetchCache valueFetchCache) {
+
+        private boolean isPatternAvailable(String jobId, String patternId, BatchResultStore store) {
+            return valueFetchCache.patternAvailability.computeIfAbsent(patternId, ignored -> store.hasPattern(jobId, patternId));
+        }
+
+        private Map<String, Object> fetchValues(BatchResultStore store,
+                                                String jobId,
+                                                String patternId,
+                                                String dimensionValue,
+                                                Set<String> keys) {
+            return valueFetchCache.getOrLoad(
+                    patternId,
+                    dimensionValue,
+                    keys,
+                    () -> store.fetchValues(jobId, patternId, dimensionValue, keys));
+        }
+    }
+
+    private static class ValueFetchCache {
+        private static final String ALL_KEYS_MARKER = "*";
+        private final int maxEntries;
+        private final Map<String, Boolean> patternAvailability = new java.util.concurrent.ConcurrentHashMap<>();
+        private final LinkedHashMap<CacheKey, Map<String, Object>> values;
+
+        private ValueFetchCache(int maxEntries) {
+            this.maxEntries = Math.max(1000, maxEntries);
+            this.values = new LinkedHashMap<>(1024, 0.75f, true);
+        }
+
+        private Map<String, Object> getOrLoad(String patternId,
+                                              String dimensionValue,
+                                              Set<String> keys,
+                                              java.util.function.Supplier<Map<String, Object>> loader) {
+            CacheKey cacheKey = CacheKey.of(patternId, dimensionValue, keys);
+            synchronized (values) {
+                Map<String, Object> cached = values.get(cacheKey);
+                if (cached != null) {
+                    return cached;
+                }
+            }
+
+            Map<String, Object> loaded = loader.get();
+            Map<String, Object> normalized = loaded == null ? Collections.emptyMap() : new HashMap<>(loaded);
+
+            synchronized (values) {
+                values.put(cacheKey, normalized);
+                if (values.size() > maxEntries) {
+                    Iterator<CacheKey> it = values.keySet().iterator();
+                    if (it.hasNext()) {
+                        it.next();
+                        it.remove();
+                    }
+                }
+            }
+            return normalized;
+        }
+    }
+
+    private record CacheKey(String patternId, String dimensionValue, String keySignature) {
+        private static CacheKey of(String patternId, String dimensionValue, Set<String> keys) {
+            if (keys == null || keys.isEmpty()) {
+                return new CacheKey(patternId, dimensionValue, ValueFetchCache.ALL_KEYS_MARKER);
+            }
+            List<String> sorted = new ArrayList<>(keys);
+            Collections.sort(sorted);
+            return new CacheKey(patternId, dimensionValue, String.join("\u001F", sorted));
+        }
     }
 
     private Object getDefaultValue(DataSourceSpec.Type type) {
