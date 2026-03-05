@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
@@ -21,7 +22,7 @@ public class ResultDistributor {
     @Value("${report.batch.distribution.cache.max-entries-per-job:${report.batch.distribution.cache-size:50000}}")
     private int maxCacheEntriesPerJob;
 
-    private final Map<String, JobDistributionContext> jobContexts = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, JobDistributionContext> jobContexts = new ConcurrentHashMap<>();
 
     public void initialize(String jobId, List<QueryPattern> patterns, Map<String, Map<String, Object>> preFetchedGlobals, ReportTemplate template) {
         jobContexts.put(jobId, new JobDistributionContext(
@@ -267,61 +268,100 @@ public class ResultDistributor {
                                                 String patternId,
                                                 String dimensionValue,
                                                 Set<String> keys) {
-            Map<String, Object> allValues = valueFetchCache.getOrLoad(
+            return valueFetchCache.getOrLoad(
                     patternId,
                     dimensionValue,
-                    () -> store.fetchValues(jobId, patternId, dimensionValue, Collections.emptySet()));
-
-            if (keys == null || keys.isEmpty()) {
-                return allValues;
-            }
-
-            Map<String, Object> filteredValues = new HashMap<>(Math.min(keys.size(), allValues.size()));
-            for (String key : keys) {
-                Object value = allValues.get(key);
-                if (value != null) {
-                    filteredValues.put(key, value);
-                }
-            }
-            return filteredValues;
+                    keys,
+                    requestedKeys -> store.fetchValues(jobId, patternId, dimensionValue, requestedKeys));
         }
     }
 
     private static class ValueFetchCache {
         private final int maxEntries;
-        private final Map<String, Boolean> patternAvailability = new java.util.concurrent.ConcurrentHashMap<>();
-        private final LinkedHashMap<DimensionCacheKey, Map<String, Object>> values;
+        private final Map<String, Boolean> patternAvailability = new ConcurrentHashMap<>();
+        private final Map<DimensionCacheKey, DimensionValueCache> values = new ConcurrentHashMap<>();
+        private final Deque<DimensionCacheKey> accessOrder = new ArrayDeque<>();
 
         private ValueFetchCache(int maxEntries) {
             this.maxEntries = Math.max(1000, maxEntries);
-            this.values = new LinkedHashMap<>(1024, 0.75f, true);
         }
 
         private Map<String, Object> getOrLoad(String patternId,
                                               String dimensionValue,
-                                              java.util.function.Supplier<Map<String, Object>> loader) {
+                                              Set<String> keys,
+                                              java.util.function.Function<Set<String>, Map<String, Object>> loader) {
             DimensionCacheKey cacheKey = new DimensionCacheKey(patternId, dimensionValue);
-            synchronized (values) {
-                Map<String, Object> cached = values.get(cacheKey);
-                if (cached != null) {
-                    return cached;
-                }
+            DimensionValueCache valueCache = values.computeIfAbsent(cacheKey, ignored -> new DimensionValueCache());
+            touch(cacheKey);
+
+            if (keys == null || keys.isEmpty()) {
+                return valueCache.loadAll(loader);
             }
 
-            Map<String, Object> loaded = loader.get();
-            Map<String, Object> normalized = loaded == null ? Collections.emptyMap() : new HashMap<>(loaded);
+            return valueCache.loadKeys(keys, loader);
+        }
 
-            synchronized (values) {
-                values.put(cacheKey, normalized);
-                if (values.size() > maxEntries) {
-                    Iterator<DimensionCacheKey> it = values.keySet().iterator();
-                    if (it.hasNext()) {
-                        it.next();
-                        it.remove();
+        private void touch(DimensionCacheKey cacheKey) {
+            synchronized (accessOrder) {
+                accessOrder.remove(cacheKey);
+                accessOrder.addLast(cacheKey);
+                while (accessOrder.size() > maxEntries) {
+                    DimensionCacheKey evicted = accessOrder.pollFirst();
+                    if (evicted != null) {
+                        values.remove(evicted);
                     }
                 }
             }
-            return normalized;
+        }
+
+        private static class DimensionValueCache {
+            private final Map<String, Object> cachedValues = new HashMap<>();
+            private boolean fullSnapshotLoaded;
+
+            private synchronized Map<String, Object> loadAll(java.util.function.Function<Set<String>, Map<String, Object>> loader) {
+                if (!fullSnapshotLoaded) {
+                    Map<String, Object> loaded = loader.apply(Collections.emptySet());
+                    if (loaded != null && !loaded.isEmpty()) {
+                        cachedValues.putAll(loaded);
+                    }
+                    fullSnapshotLoaded = true;
+                }
+                return new HashMap<>(cachedValues);
+            }
+
+            private synchronized Map<String, Object> loadKeys(Set<String> keys,
+                                                              java.util.function.Function<Set<String>, Map<String, Object>> loader) {
+                if (fullSnapshotLoaded) {
+                    return filterKeys(keys);
+                }
+
+                Set<String> missing = new LinkedHashSet<>();
+                for (String key : keys) {
+                    if (!cachedValues.containsKey(key)) {
+                        missing.add(key);
+                    }
+                }
+
+                if (!missing.isEmpty()) {
+                    Map<String, Object> loaded = loader.apply(missing);
+                    if (loaded != null && !loaded.isEmpty()) {
+                        cachedValues.putAll(loaded);
+                    }
+                }
+
+                return filterKeys(keys);
+            }
+
+            private Map<String, Object> filterKeys(Set<String> keys) {
+                Map<String, Object> filtered = new HashMap<>(keys.size());
+                for (String key : keys) {
+                    Object value = cachedValues.get(key);
+                    if (value != null) {
+                        filtered.put(key, value);
+                    }
+                }
+                return filtered;
+            }
         }
     }
 

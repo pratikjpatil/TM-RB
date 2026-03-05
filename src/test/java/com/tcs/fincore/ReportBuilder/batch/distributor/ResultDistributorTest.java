@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ResultDistributorTest {
 
@@ -142,12 +143,16 @@ class ResultDistributorTest {
 
         cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec1, spec2));
         assertEquals(1, countingStore.fetchValuesCalls.get(), "subsequent calls should hit in-memory fetch cache");
+        assertEquals(0, countingStore.fullFetchCalls.get(), "distribution should avoid expensive full-dimension fetches");
+        assertTrue(countingStore.partialFetchCalls.get() >= 1, "distribution should fetch only required keys");
     }
 
     private static class CountingBatchResultStore implements BatchResultStore {
         private final InMemoryBatchResultStore delegate = new InMemoryBatchResultStore();
         private final AtomicInteger hasPatternCalls = new AtomicInteger();
         private final AtomicInteger fetchValuesCalls = new AtomicInteger();
+        private final AtomicInteger fullFetchCalls = new AtomicInteger();
+        private final AtomicInteger partialFetchCalls = new AtomicInteger();
 
         @Override
         public void initializeJob(String jobId, Duration ttl) {
@@ -162,6 +167,11 @@ class ResultDistributorTest {
         @Override
         public Map<String, Object> fetchValues(String jobId, String patternId, String dimensionValue, Set<String> keys) {
             fetchValuesCalls.incrementAndGet();
+            if (keys == null || keys.isEmpty()) {
+                fullFetchCalls.incrementAndGet();
+            } else {
+                partialFetchCalls.incrementAndGet();
+            }
             return delegate.fetchValues(jobId, patternId, dimensionValue, keys);
         }
 
