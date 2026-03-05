@@ -267,19 +267,30 @@ public class ResultDistributor {
                                                 String patternId,
                                                 String dimensionValue,
                                                 Set<String> keys) {
-            return valueFetchCache.getOrLoad(
+            Map<String, Object> allValues = valueFetchCache.getOrLoad(
                     patternId,
                     dimensionValue,
-                    keys,
-                    () -> store.fetchValues(jobId, patternId, dimensionValue, keys));
+                    () -> store.fetchValues(jobId, patternId, dimensionValue, Collections.emptySet()));
+
+            if (keys == null || keys.isEmpty()) {
+                return allValues;
+            }
+
+            Map<String, Object> filteredValues = new HashMap<>(Math.min(keys.size(), allValues.size()));
+            for (String key : keys) {
+                Object value = allValues.get(key);
+                if (value != null) {
+                    filteredValues.put(key, value);
+                }
+            }
+            return filteredValues;
         }
     }
 
     private static class ValueFetchCache {
-        private static final String ALL_KEYS_MARKER = "*";
         private final int maxEntries;
         private final Map<String, Boolean> patternAvailability = new java.util.concurrent.ConcurrentHashMap<>();
-        private final LinkedHashMap<CacheKey, Map<String, Object>> values;
+        private final LinkedHashMap<DimensionCacheKey, Map<String, Object>> values;
 
         private ValueFetchCache(int maxEntries) {
             this.maxEntries = Math.max(1000, maxEntries);
@@ -288,9 +299,8 @@ public class ResultDistributor {
 
         private Map<String, Object> getOrLoad(String patternId,
                                               String dimensionValue,
-                                              Set<String> keys,
                                               java.util.function.Supplier<Map<String, Object>> loader) {
-            CacheKey cacheKey = CacheKey.of(patternId, dimensionValue, keys);
+            DimensionCacheKey cacheKey = new DimensionCacheKey(patternId, dimensionValue);
             synchronized (values) {
                 Map<String, Object> cached = values.get(cacheKey);
                 if (cached != null) {
@@ -304,7 +314,7 @@ public class ResultDistributor {
             synchronized (values) {
                 values.put(cacheKey, normalized);
                 if (values.size() > maxEntries) {
-                    Iterator<CacheKey> it = values.keySet().iterator();
+                    Iterator<DimensionCacheKey> it = values.keySet().iterator();
                     if (it.hasNext()) {
                         it.next();
                         it.remove();
@@ -315,16 +325,7 @@ public class ResultDistributor {
         }
     }
 
-    private record CacheKey(String patternId, String dimensionValue, String keySignature) {
-        private static CacheKey of(String patternId, String dimensionValue, Set<String> keys) {
-            if (keys == null || keys.isEmpty()) {
-                return new CacheKey(patternId, dimensionValue, ValueFetchCache.ALL_KEYS_MARKER);
-            }
-            List<String> sorted = new ArrayList<>(keys);
-            Collections.sort(sorted);
-            return new CacheKey(patternId, dimensionValue, String.join("\u001F", sorted));
-        }
-    }
+    private record DimensionCacheKey(String patternId, String dimensionValue) {}
 
     private Object getDefaultValue(DataSourceSpec.Type type) {
         return switch (type) {

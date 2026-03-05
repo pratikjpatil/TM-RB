@@ -105,7 +105,7 @@ class ResultDistributorTest {
         cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec));
 
         assertEquals(1, countingStore.hasPatternCalls.get(), "pattern availability should be cached");
-        assertEquals(2, countingStore.fetchValuesCalls.get(), "dimension + DEFAULT fallback should be cached after first lookup");
+        assertEquals(1, countingStore.fetchValuesCalls.get(), "dimension values should be cached after first lookup");
     }
 
     @Test
