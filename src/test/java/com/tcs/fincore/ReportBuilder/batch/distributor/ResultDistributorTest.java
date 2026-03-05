@@ -12,9 +12,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ResultDistributorTest {
 
@@ -142,12 +144,15 @@ class ResultDistributorTest {
 
         cachedDistributor.getResultsForDimension(jobId, "D1", List.of(spec1, spec2));
         assertEquals(1, countingStore.fetchValuesCalls.get(), "subsequent calls should hit in-memory fetch cache");
+        assertFalse(countingStore.requestedKeySets.isEmpty(), "store should receive key set for selective fetch");
+        assertFalse(countingStore.requestedKeySets.get(0).isEmpty(), "redis fetch should not request full hash for grouped specs");
     }
 
     private static class CountingBatchResultStore implements BatchResultStore {
         private final InMemoryBatchResultStore delegate = new InMemoryBatchResultStore();
         private final AtomicInteger hasPatternCalls = new AtomicInteger();
         private final AtomicInteger fetchValuesCalls = new AtomicInteger();
+        private final List<Set<String>> requestedKeySets = new CopyOnWriteArrayList<>();
 
         @Override
         public void initializeJob(String jobId, Duration ttl) {
@@ -162,6 +167,7 @@ class ResultDistributorTest {
         @Override
         public Map<String, Object> fetchValues(String jobId, String patternId, String dimensionValue, Set<String> keys) {
             fetchValuesCalls.incrementAndGet();
+            requestedKeySets.add(keys == null ? Set.of() : Set.copyOf(keys));
             return delegate.fetchValues(jobId, patternId, dimensionValue, keys);
         }
 
