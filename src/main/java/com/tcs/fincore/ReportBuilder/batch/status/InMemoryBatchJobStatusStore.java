@@ -1,6 +1,6 @@
 package com.tcs.fincore.ReportBuilder.batch.status;
 
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 

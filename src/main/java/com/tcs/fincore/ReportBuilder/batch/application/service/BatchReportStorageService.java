@@ -1,4 +1,4 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.support;
+package com.tcs.fincore.ReportBuilder.batch.application.service;
 
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
@@ -6,6 +6,7 @@ import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.model.variant.ReportVariant;
 import com.tcs.fincore.ReportBuilder.service.export.ExporterFactory;
 import com.tcs.fincore.ReportBuilder.service.export.ReportExporter;
+import com.tcs.fincore.ReportBuilder.service.storage.ReportStoragePathService;
 import com.tcs.fincore.ReportBuilder.util.FileStorageUtil;
 import com.tcs.fincore.ReportBuilder.util.ReportFileNameUtil;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +18,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +32,7 @@ public class BatchReportStorageService {
 
     private final ExporterFactory exporterFactory;
     private final FileSystem hdfsFileSystem;
+    private final ReportStoragePathService storagePathService;
 
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
@@ -51,8 +52,12 @@ public class BatchReportStorageService {
         params.put(varyingParamName, dimensionValue);
 
         String fileName = ReportFileNameUtil.buildFileName(template, variant, params);
-        Path directory = createHdfsDirectory(resolveBasePath(basePath), LocalDate.now(),
-                safeReportId + "/" + safeDimensionValue);
+        Path directory = storagePathService.ensureDateBasedReportDirectory(
+                hdfsFileSystem,
+                resolveBasePath(basePath),
+                LocalDate.now(),
+                safeReportId,
+                safeDimensionValue);
 
         List<String> formats = requestedFormats != null ? requestedFormats : List.of("pdf", "xlsx");
         for (String format : formats) {
@@ -78,23 +83,10 @@ public class BatchReportStorageService {
     }
 
     private String sanitizeDimensionValueForPath(String dimensionValue) {
-        if (dimensionValue == null || dimensionValue.isBlank()) {
-            throw new ValidationException("Dimension value cannot be null or blank");
-        }
-        String sanitized = dimensionValue.replaceAll("[^A-Za-z0-9_\\-]", "_");
-        if (sanitized.contains("..") || sanitized.startsWith("/") || sanitized.startsWith("\\")) {
+        try {
+            return storagePathService.sanitizePathSegment(dimensionValue);
+        } catch (ValidationException e) {
             throw new ValidationException("Invalid dimension value for path: " + dimensionValue);
         }
-        return sanitized.length() > 64 ? sanitized.substring(0, 64) : sanitized;
-    }
-
-    private Path createHdfsDirectory(String basePath, LocalDate date,
-                                     String afterDateFilePath) throws IOException {
-        String dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
-        Path path = new Path(basePath, dateStr + "/" + afterDateFilePath);
-        if (!hdfsFileSystem.exists(path)) {
-            hdfsFileSystem.mkdirs(path);
-        }
-        return path;
     }
 }

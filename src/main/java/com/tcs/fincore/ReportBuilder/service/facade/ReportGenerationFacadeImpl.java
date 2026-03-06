@@ -14,6 +14,7 @@ import com.tcs.fincore.ReportBuilder.service.export.ReportExporter;
 import com.tcs.fincore.ReportBuilder.service.metadata.ReportMetadataService;
 import com.tcs.fincore.ReportBuilder.service.pipeline.ReportExecutionService;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
+import com.tcs.fincore.ReportBuilder.service.storage.ReportStoragePathService;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 import com.tcs.fincore.ReportBuilder.util.FileStorageUtil;
 import com.tcs.fincore.ReportBuilder.util.ReportFileNameUtil;
@@ -29,7 +30,6 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @Slf4j
@@ -44,6 +44,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     private final ExporterFactory exporterFactory;
     private final FileSystem hdfsFileSystem;
     private final ReportEventPublisher eventPublisher;
+    private final ReportStoragePathService storagePathService;
 
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
@@ -223,18 +224,12 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
      */
     private Path resolveHdfsDirectory(String basePath, LocalDate date, String reportId)
             throws IOException {
-        String dateStr        = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
-        String safeReportId   = sanitizePathSegment(reportId);
-        Path   path           = new Path(basePath, dateStr + "/" + safeReportId);
-
-        if (!hdfsFileSystem.exists(path)) {
-            boolean created = hdfsFileSystem.mkdirs(path);
-            if (!created) {
-                throw new IOException("Failed to create HDFS directory: " + path);
-            }
-            log.debug("Created HDFS directory: {}", path);
-        }
-        return path;
+        return storagePathService.ensureDateBasedReportDirectory(
+                hdfsFileSystem,
+                basePath,
+                date,
+                reportId,
+                null);
     }
 
     /**
@@ -242,14 +237,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
      * Mirrors the sanitization logic in {@code BatchJobOrchestrator}.
      */
     private String sanitizePathSegment(String value) {
-        if (value == null || value.isBlank()) {
-            throw new ValidationException("Path segment cannot be null or blank");
-        }
-        String sanitized = value.replaceAll("[^A-Za-z0-9_\\-]", "_");
-        if (sanitized.contains("..") || sanitized.startsWith("/") || sanitized.startsWith("\\")) {
-            throw new ValidationException("Invalid path segment: " + value);
-        }
-        return sanitized.length() > 64 ? sanitized.substring(0, 64) : sanitized;
+        return storagePathService.sanitizePathSegment(value);
     }
 
     /**

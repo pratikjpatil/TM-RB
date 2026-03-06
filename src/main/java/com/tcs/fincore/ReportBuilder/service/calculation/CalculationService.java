@@ -2,6 +2,7 @@ package com.tcs.fincore.ReportBuilder.service.calculation;
 
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
+import com.tcs.fincore.ReportBuilder.service.runtime.JexlEngineFactory;
 import com.tcs.fincore.ReportBuilder.util.GraphUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.jexl3.*;
@@ -30,16 +31,8 @@ public class CalculationService {
 
     private final JexlEngine jexl;
 
-    public CalculationService() {
-        // Cache size optimized for typical report formula count
-        this.jexl = new JexlBuilder()
-                .cache(512)
-                .silent(false)
-                .strict(true)
-                // INJECTING CUSTOM ARITHMETIC HERE TO HANDLE DIVIDE BY 0 ERRORS
-                .arithmetic(new SafeArithmetic(true))
-                .namespaces(Map.of("math", Math.class))
-                .create();
+    public CalculationService(JexlEngineFactory jexlEngineFactory) {
+        this.jexl = jexlEngineFactory.createCalculationEngine(new SafeArithmetic(true));
     }
 
     public Map<String, Object> calculate(ReportTemplate template, Map<String, Object> dbResultsInput) {

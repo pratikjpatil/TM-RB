@@ -1,10 +1,12 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.support;
+package com.tcs.fincore.ReportBuilder.batch.application.service;
 
 import com.tcs.fincore.ReportBuilder.batch.analyzer.QueryPatternAnalyzer;
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchTemplateAnalyzer;
 import com.tcs.fincore.ReportBuilder.batch.processor.GlobalParamBatchProcessor;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.application.util.TemplateCloner;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.model.variant.ReportVariant;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
@@ -22,7 +24,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class BatchTemplateAnalysisService {
+public class BatchTemplateAnalysisService implements BatchTemplateAnalyzer {
 
     private final ReportMetadataService metadataService;
     private final ReportRuntimeService runtimeService;

@@ -1,6 +1,6 @@
 package com.tcs.fincore.ReportBuilder.kafka.publisher;
 
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 
 import java.time.Instant;

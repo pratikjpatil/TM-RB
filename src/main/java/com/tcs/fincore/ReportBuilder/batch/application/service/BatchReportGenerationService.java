@@ -1,9 +1,10 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.support;
+package com.tcs.fincore.ReportBuilder.batch.application.service;
 
 import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.model.BatchAnalysisResult;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchReportGenerator;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.AggregatorService;
@@ -11,6 +12,7 @@ import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import com.tcs.fincore.ReportBuilder.service.calculation.CalculationService;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
 import com.tcs.fincore.ReportBuilder.service.template.TemplateProcessorService;
+import com.tcs.fincore.ReportBuilder.batch.application.util.TemplateCloner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,7 +31,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class BatchReportGenerationService {
+public class BatchReportGenerationService implements BatchReportGenerator {
 
     private final ReportRuntimeService runtimeService;
     private final TemplateProcessorService templateProcessor;

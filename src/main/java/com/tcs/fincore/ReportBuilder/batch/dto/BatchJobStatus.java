@@ -1,4 +1,4 @@
-package com.tcs.fincore.ReportBuilder.dto;
+package com.tcs.fincore.ReportBuilder.batch.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

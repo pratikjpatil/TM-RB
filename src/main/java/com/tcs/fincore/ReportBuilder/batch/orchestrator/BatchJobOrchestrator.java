@@ -1,24 +1,24 @@
 package com.tcs.fincore.ReportBuilder.batch.orchestrator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.model.BatchAnalysisResult;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchDataMaterializationService;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchReportGenerationService;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchTemplateAnalysisService;
+import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchDataMaterializationCoordinator;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchReportGenerator;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchTemplateAnalyzer;
 import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.status.BatchJobStatusStore;
 import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.kafka.publisher.ReportEventPublisher;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -40,13 +40,15 @@ import java.util.concurrent.atomic.AtomicLong;
 public class BatchJobOrchestrator {
 
     private final ObjectMapper objectMapper;
-    private final BatchTemplateAnalysisService batchTemplateAnalysisService;
-    private final BatchDataMaterializationService batchDataMaterializationService;
-    private final BatchReportGenerationService batchReportGenerationService;
+    private final BatchTemplateAnalyzer batchTemplateAnalysisService;
+    private final BatchDataMaterializationCoordinator batchDataMaterializationService;
+    private final BatchReportGenerator batchReportGenerationService;
     private final BatchJobStatusStore batchJobStatusStore;
     private final BatchResultStore batchResultStore;
     private final ResultDistributor resultDistributor;
     private final ReportEventPublisher eventPublisher;
+    @Qualifier("batchReportGenerationExecutor")
+    private final Executor reportGenerationExecutor;
 
     @Lazy
     @Autowired
@@ -72,38 +74,14 @@ public class BatchJobOrchestrator {
     private final ConcurrentHashMap<String, AtomicLong> lastStatusPersistTimes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ReportExecutionContext> executionContexts = new ConcurrentHashMap<>();
 
-    private ExecutorService reportGenerationExecutor;
-
     @PostConstruct
     public void setup() {
         objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
         objectMapper.configure(
                 com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
-        reportGenerationExecutor = new ThreadPoolExecutor(
-                10, 60,
-                60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(1000),
-                new ThreadPoolExecutor.CallerRunsPolicy()
-        );
-
         log.info("BatchJobOrchestrator initialized. materializationTimeout={}m, generationTimeout={}m",
                 materializationTimeoutMinutes, generationTimeoutMinutes);
-    }
-
-    @PreDestroy
-    public void shutdown() {
-        log.info("Shutting down reportGenerationExecutor...");
-        reportGenerationExecutor.shutdown();
-        try {
-            if (!reportGenerationExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                log.warn("Executor did not terminate in 30s — forcing shutdown");
-                reportGenerationExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            reportGenerationExecutor.shutdownNow();
-        }
     }
 
     @Scheduled(fixedDelayString = "${report.batch.status.cleanup-interval-ms:1800000}")
@@ -216,7 +194,7 @@ public class BatchJobOrchestrator {
                     analysis,
                     status,
                     cancelled,
-                    reportGenerationExecutor,
+                    toExecutorService(reportGenerationExecutor),
                     jobFutures.get(jobId),
                     generationTimeoutMinutes,
                     () -> markCancelled(status, jobId),
@@ -449,5 +427,12 @@ public class BatchJobOrchestrator {
                             / status.getProgress().getTotalReports()));
         }
         log.info("=======================");
+    }
+
+    private ExecutorService toExecutorService(Executor executor) {
+        if (executor instanceof ExecutorService executorService) {
+            return executorService;
+        }
+        throw new IllegalStateException("batchReportGenerationExecutor must be an ExecutorService implementation");
     }
 }

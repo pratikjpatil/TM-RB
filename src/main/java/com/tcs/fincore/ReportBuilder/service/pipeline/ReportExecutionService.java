@@ -54,13 +54,14 @@ public class ReportExecutionService {
 
         } catch (ValidationException ex) {
             throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ReportProcessingException("Report generation pipeline interrupted", ex);
         } catch (RuntimeException ex) {
             String templateId = template != null && template.getReportMeta() != null ? template.getReportMeta().getReportId() : "N/A";
             log.error("Pipeline execution failed: jobId={} templateId={} correlationId={} errorType={}",
                     "N/A", templateId, "N/A", ex.getClass().getSimpleName(), ex);
             throw new ReportProcessingException("Report generation pipeline failed", ex);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
         }
     }
 }
