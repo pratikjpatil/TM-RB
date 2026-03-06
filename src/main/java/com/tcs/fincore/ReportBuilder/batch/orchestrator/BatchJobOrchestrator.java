@@ -34,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
@@ -77,8 +78,25 @@ public class BatchJobOrchestrator {
 
 
     private final ReportEventPublisher eventPublisher;
+
+    /**
+     * Self-proxy reference used exclusively to invoke {@link #processJobAsync} through
+     * Spring's AOP proxy, ensuring the {@code @Async} interceptor is applied.
+     *
+     * <p><strong>Why field injection here?</strong>
+     * {@code @RequiredArgsConstructor} generates a constructor that injects every
+     * {@code final} field. Spring cannot apply {@code @Lazy} to constructor parameters,
+     * so declaring this field {@code final} causes a circular-dependency failure at
+     * startup. Field injection with {@code @Lazy} breaks the cycle: Spring creates the
+     * {@code BatchJobOrchestrator} bean first (constructor runs without the proxy), then
+     * injects the proxy reference once the bean is fully initialized.
+     *
+     * <p>This field must remain {@code non-final} and must <em>never</em> be moved back
+     * into the {@code final} field block above.
+     */
     @Lazy
-    private final BatchJobOrchestrator selfProxy;
+    @Autowired
+    private BatchJobOrchestrator selfProxy;
 
     @Value("${report.batch.materialization.timeout-minutes:30}")
     private long materializationTimeoutMinutes;
@@ -185,15 +203,10 @@ public class BatchJobOrchestrator {
      * @param context  the execution context (trigger source + correlation IDs)
      */
     public BatchJobStatus submitJob(BatchJobRequest request, ReportExecutionContext context) {
-        // If IDs provided via context (Kafka), use them as the jobId
-        if (context.isKafkaTriggered()
-                && request.getJobId() == null || (request.getJobId() != null && request.getJobId().isBlank())) {
-            // The Kafka consumer already set the composite ID — trust it.
-            // If for some reason it wasn't set, derive it here.
-            if (request.getJobId() == null || request.getJobId().isBlank()) {
-                request.setJobId(generateJobId(request));
-            }
-        } else if (request.getJobId() == null || request.getJobId().isBlank()) {
+        // Derive a job ID when none is provided, regardless of trigger source.
+        // For Kafka-triggered jobs the consumer should already have set a composite ID;
+        // we only generate one here as a safety net.
+        if (request.getJobId() == null || request.getJobId().isBlank()) {
             request.setJobId(generateJobId(request));
         }
 
