@@ -34,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -76,6 +77,8 @@ public class BatchJobOrchestrator {
 
 
     private final ReportEventPublisher eventPublisher;
+    @Lazy
+    private final BatchJobOrchestrator selfProxy;
 
     @Value("${report.batch.materialization.timeout-minutes:30}")
     private long materializationTimeoutMinutes;
@@ -200,7 +203,7 @@ public class BatchJobOrchestrator {
         jobFutures.put(request.getJobId(), Collections.synchronizedList(new ArrayList<>()));
         executionContexts.put(request.getJobId(), context);
 
-        processJobAsync(request);
+        selfProxy.processJobAsync(request);
         return status;
     }
 

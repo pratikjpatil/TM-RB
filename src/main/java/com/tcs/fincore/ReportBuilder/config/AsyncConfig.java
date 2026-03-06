@@ -18,8 +18,11 @@ import java.util.concurrent.ThreadPoolExecutor;
 public class AsyncConfig {
 
     /**
-     * Executor for async report generation and HDFS writes
-     * Bounded with backpressure via CallerRunsPolicy
+     * Executor for async report generation and HDFS writes.
+     *
+     * <p>Uses {@link ThreadPoolExecutor.AbortPolicy} so HTTP request threads are never used to
+     * execute report work when the pool is saturated (which would make async endpoints appear
+     * synchronous).
      */
     @Bean(name = "reportExecutor")
     public Executor reportExecutor() {
@@ -37,9 +40,8 @@ public class AsyncConfig {
         // Thread naming for debugging
         executor.setThreadNamePrefix("report-async-");
         
-        //  CRITICAL: CallerRunsPolicy provides backpressure
-        // If queue is full, the calling thread executes the task (slows down submission)
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // Fail fast when saturated instead of running on the caller thread.
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         
         // Graceful shutdown
         executor.setWaitForTasksToCompleteOnShutdown(true);

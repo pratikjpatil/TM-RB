@@ -12,6 +12,7 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -107,6 +108,14 @@ public class ReportController {
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
+                    "correlationId", correlationId
+            ));
+        } catch (TaskRejectedException e) {
+            log.warn("Async executor saturated for single-mode HDFS generation: correlationId={} templateId={}",
+                    correlationId, templateId, e);
+            return ResponseEntity.status(503).body(Map.of(
+                    "status", "ERROR",
+                    "message", "Report generation queue is full. Please retry shortly.",
                     "correlationId", correlationId
             ));
         } catch (RuntimeException e) {
