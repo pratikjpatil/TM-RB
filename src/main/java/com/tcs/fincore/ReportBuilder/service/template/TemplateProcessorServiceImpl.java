@@ -21,6 +21,9 @@ import java.util.*;
 @Service
 public class TemplateProcessorServiceImpl implements TemplateProcessorService {
 
+    @Value("${report.batch.max-specs-per-template:10000}")
+    private int maxDynamicRowLimit;
+
     private final NamedParameterJdbcTemplate jdbc;
     private static final Set<String> VALID_ORDER_DIRECTIONS = Set.of("ASC", "DESC");
 
@@ -242,9 +245,9 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
             String orderBy = cfg.containsKey("orderby") ? (String) cfg.get("orderby") : null;
             int limit = cfg.containsKey("limit") ? ((Number) cfg.get("limit")).intValue() : 300;
 
-            if (limit < 1 || limit > 10000) {
+            if (limit < 1 || limit > maxDynamicRowLimit) {
                 throw new ValidationException(
-                        "DYNAMIC row limit must be between 1 and 10000, got: " + limit);
+                        "DYNAMIC row limit must be between 1 and " + maxDynamicRowLimit + ", got: " + limit);
             }
 
             try {
