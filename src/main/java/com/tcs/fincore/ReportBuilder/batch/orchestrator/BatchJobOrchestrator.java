@@ -101,6 +101,9 @@ public class BatchJobOrchestrator {
     @Value("${report.batch.status.persist-interval-ms:1000}")
     private long statusPersistIntervalMs;
 
+    @Value("${report.batch.max-reports-per-job:50000}")
+    private int maxReportsPerJob;
+
 
     private final ConcurrentHashMap<String, AtomicBoolean> cancellationTokens = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<Future<?>>> jobFutures = new ConcurrentHashMap<>();
@@ -647,9 +650,9 @@ public class BatchJobOrchestrator {
         }
 
         int maxReports = request.getVaryingDimension().getValues().size();
-        if (maxReports > 50_000) {
+        if (maxReports > maxReportsPerJob) {
             throw new ValidationException(
-                    "Too many dimension values (" + maxReports + ", max: 50000)");
+                    "Too many dimension values (" + maxReports + ", max: " + maxReportsPerJob + ")");
         }
     }
 

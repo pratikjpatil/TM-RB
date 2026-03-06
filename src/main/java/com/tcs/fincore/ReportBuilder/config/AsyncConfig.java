@@ -1,6 +1,7 @@
 package com.tcs.fincore.ReportBuilder.config;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -17,6 +18,18 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Slf4j
 public class AsyncConfig {
 
+    @Value("${spring.task.execution.pool.core-size:4}")
+    private int corePoolSize;
+
+    @Value("${spring.task.execution.pool.max-size:50}")
+    private int maxPoolSize;
+
+    @Value("${spring.task.execution.pool.queue-capacity:100}")
+    private int queueCapacity;
+
+    @Value("${spring.task.execution.thread-name-prefix:report-async-}")
+    private String threadNamePrefix;
+
     /**
      * Executor for async report generation and HDFS writes.
      *
@@ -29,16 +42,16 @@ public class AsyncConfig {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         
         // Core threads always alive
-        executor.setCorePoolSize(4);
+        executor.setCorePoolSize(corePoolSize);
         
         // Max threads for peak load
-        executor.setMaxPoolSize(60);
+        executor.setMaxPoolSize(maxPoolSize);
         
         // Queue capacity for backpressure
-        executor.setQueueCapacity(100);
+        executor.setQueueCapacity(queueCapacity);
         
         // Thread naming for debugging
-        executor.setThreadNamePrefix("report-async-");
+        executor.setThreadNamePrefix(threadNamePrefix);
         
         // Fail fast when saturated instead of running on the caller thread.
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
