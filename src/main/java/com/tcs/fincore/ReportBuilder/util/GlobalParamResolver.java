@@ -1,9 +1,14 @@
 package com.tcs.fincore.ReportBuilder.util;
 
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
+import com.tcs.fincore.ReportBuilder.service.runtime.JexlEngineFactory;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.jexl3.*;
-import org.apache.commons.jexl3.introspection.JexlPermissions;
+import org.apache.commons.jexl3.JexlContext;
+import org.apache.commons.jexl3.JexlEngine;
+import org.apache.commons.jexl3.JexlException;
+import org.apache.commons.jexl3.JexlExpression;
+import org.apache.commons.jexl3.MapContext;
+import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,96 +18,47 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * PRODUCTION-GRADE: Central logic for resolving Global Params ($G{...})
- * and Inline Expressions (#{...}).
- * * Includes JexlEngine caching for performance.
+ * Central logic for resolving global params ($G{...}) and inline expressions (#{...}).
  */
 @Slf4j
+@Component
 public class GlobalParamResolver {
 
     private static final Pattern GLOBAL_PATTERN = Pattern.compile("\\$G\\{([a-zA-Z0-9_]+)\\}");
-//    private static final JexlEngine jexl = new JexlBuilder()
-//            .cache(512)
-//            .strict(true)
-//            .silent(false)
-//            .permissions(JexlPermissions.UNRESTRICTED)
-//            .create();
 
-    /**
-     * SECURITY FIX: Replace UNRESTRICTED permissions with a strict allowlist.
-     * Only our own DateUtilsHelper and java.lang.Math are permitted.
-     * All Java reflection, runtime execution, file I/O, and class loading is blocked.
-     */
-    private static final JexlPermissions SAFE_PERMISSIONS = JexlPermissions.parse(
-            // Allow ONLY our utility classes and safe Java classes
-            "com.tcs.fincore.ReportBuilder.util.DateUtilsHelper",
-            "java.lang.Math",
-            "java.lang.String",
-            "java.lang.Number",
-            "java.time.LocalDate",
-            "java.time.LocalDateTime"
-    );
+    private final JexlEngine jexl;
 
-    private static final JexlEngine jexl = new JexlBuilder()
-            .cache(512)
-            .strict(true)
-            .silent(false)
-            .permissions(SAFE_PERMISSIONS)
-            .create();
+    public GlobalParamResolver(JexlEngineFactory jexlEngineFactory) {
+        this.jexl = jexlEngineFactory.createSecureEngine();
+    }
 
-
-
-
-    /**
-     * Resolves a value which might be a literal, a global ref ($G), or an expression (#{}).
-     */
-    public static Object resolveValue(Object rawValue, Map<String, Object> runtimeParams) {
-
+    public Object resolveValue(Object rawValue, Map<String, Object> runtimeParams) {
         if (rawValue == null) return null;
+        if (!(rawValue instanceof String s)) return rawValue;
 
-        // Return non-strings immediately (Numbers, Dates)
-        if (!(rawValue instanceof String s)) {
-            return rawValue;
-        }
-
-        // 1. Check for Inline Expression: "#{ ... }"
-        // Syntax: #{ DateUtils.addYears(G.REPORT_DATE, -1) }
         String trimmed = s.trim();
         if (trimmed.startsWith("#{") && trimmed.endsWith("}")) {
             String expression = trimmed.substring(2, trimmed.length() - 1);
-            log.debug("Runtime Params :: {}",runtimeParams);
             return evaluateExpression(expression, runtimeParams);
         }
 
-        // 2. Check for Global Param Replacement: "$G{PARAM}"
-        // Handle exact match to preserve type (e.g. return LocalDate object, not string repr)
         Matcher m = GLOBAL_PATTERN.matcher(trimmed);
         if (m.matches()) {
             String key = m.group(1);
             if (runtimeParams.containsKey(key)) {
                 return runtimeParams.get(key);
             }
-            // Should we return null or throw? Returning original allows lenient fallback.
-//            log.warn("Global param '{}' not found in runtime context", key);
-            //  Fail Fast
             throw new ValidationException("Runtime Error: Parameter '$G{" + key + "}' referenced but not found in context.");
-//            return rawValue;
         }
 
-        // 3. Handle String Interpolation: "Report for $G{REGION} Region"
         if (s.contains("$G{")) {
             return interpolateString(s, runtimeParams);
         }
-
-        // No resolution needed
         return rawValue;
     }
 
-    /**
-     * Recursively resolves values in Maps and Lists (Deep Resolve).
-     */
     @SuppressWarnings("unchecked")
-    public static Object resolveRecursive(Object input, Map<String, Object> params) {
+    public Object resolveRecursive(Object input, Map<String, Object> params) {
         if (input instanceof String) {
             return resolveValue(input, params);
         } else if (input instanceof Map) {
@@ -117,28 +73,15 @@ public class GlobalParamResolver {
         return input;
     }
 
-    private static Object evaluateExpression(String expression, Map<String, Object> params) {
+    private Object evaluateExpression(String expression, Map<String, Object> params) {
         try {
-            // Create context
             JexlContext context = new MapContext();
-
-            // Expose params under "G" namespace (e.g., G.REPORT_DATE)
             context.set("G", params);
-
-            // Add Helper Libraries
             context.set("DateUtils", new DateUtilsHelper());
-            // Add Math if needed
             context.set("Math", Math.class);
 
-            // Evaluate
             JexlExpression e = jexl.createExpression(expression);
-            Object result = e.evaluate(context);
-
-            if (log.isTraceEnabled()) {
-                log.trace("Evaluated Expression: '{}' -> Result: {}", expression, result);
-            }
-            return result;
-
+            return e.evaluate(context);
         } catch (JexlException ex) {
             log.error("Failed to evaluate inline expression: '{}'. Error: {}", expression, ex.getMessage());
             throw new ValidationException("Invalid expression syntax: " + expression + ". " + ex.getMessage());
@@ -148,7 +91,7 @@ public class GlobalParamResolver {
         }
     }
 
-    private static String interpolateString(String template, Map<String, Object> params) {
+    private String interpolateString(String template, Map<String, Object> params) {
         Matcher m = GLOBAL_PATTERN.matcher(template);
         StringBuilder sb = new StringBuilder();
         while (m.find()) {

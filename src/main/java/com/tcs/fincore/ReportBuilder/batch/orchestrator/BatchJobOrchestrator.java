@@ -1,10 +1,10 @@
 package com.tcs.fincore.ReportBuilder.batch.orchestrator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.model.BatchAnalysisResult;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchDataMaterializationService;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchReportGenerationService;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.support.BatchTemplateAnalysisService;
+import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchDataMaterializationCoordinator;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchReportGenerator;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchTemplateAnalyzer;
 import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.status.BatchJobStatusStore;
 import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
@@ -40,9 +40,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public class BatchJobOrchestrator {
 
     private final ObjectMapper objectMapper;
-    private final BatchTemplateAnalysisService batchTemplateAnalysisService;
-    private final BatchDataMaterializationService batchDataMaterializationService;
-    private final BatchReportGenerationService batchReportGenerationService;
+    private final BatchTemplateAnalyzer batchTemplateAnalysisService;
+    private final BatchDataMaterializationCoordinator batchDataMaterializationService;
+    private final BatchReportGenerator batchReportGenerationService;
     private final BatchJobStatusStore batchJobStatusStore;
     private final BatchResultStore batchResultStore;
     private final ResultDistributor resultDistributor;

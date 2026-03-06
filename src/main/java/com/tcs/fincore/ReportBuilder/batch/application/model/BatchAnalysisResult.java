@@ -1,4 +1,4 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.model;
+package com.tcs.fincore.ReportBuilder.batch.application.model;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;

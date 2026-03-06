@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class GlobalParamBatchProcessor {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final GlobalParamResolver globalParamResolver;
 
     /**
      * Pre-fetches varying global parameters for all batch items.
@@ -101,7 +102,7 @@ public class GlobalParamBatchProcessor {
                         linkCol = dbCol;
                     } else {
                         // Must be static resolvable
-                        Object resolvedVal = GlobalParamResolver.resolveValue(val, staticContext);
+                        Object resolvedVal = globalParamResolver.resolveValue(val, staticContext);
                         // If it still contains $G, it depends on another dynamic param -> Abort batching for this node
                         if (String.valueOf(resolvedVal).contains("$G{")) return null;
 
