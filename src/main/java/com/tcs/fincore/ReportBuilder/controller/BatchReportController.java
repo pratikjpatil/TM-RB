@@ -11,6 +11,7 @@ import com.tcs.fincore.ReportBuilder.exception.InfrastructureException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -58,6 +59,14 @@ public class BatchReportController {
                     "correlationId", correlationId
             ));
 
+        } catch (TaskRejectedException e) {
+            log.warn("Batch submission rejected because async queue is full: correlationId={} templateId={}",
+                    correlationId, request.getTemplateId(), e);
+            return ResponseEntity.status(503).body(Map.of(
+                    "status", "ERROR",
+                    "message", "Batch processing queue is full. Please retry shortly.",
+                    "correlationId", correlationId
+            ));
         } catch (RuntimeException e) {
             throw new InfrastructureException("Failed to submit batch job", e);
         }
@@ -192,6 +201,14 @@ public class BatchReportController {
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR", "message", e.getMessage()));
 
+        } catch (TaskRejectedException e) {
+            log.warn("All-branches submission rejected because async queue is full: correlationId={} templateId={}",
+                    correlationId, request.get("templateId"), e);
+            return ResponseEntity.status(503).body(Map.of(
+                    "status", "ERROR",
+                    "message", "Batch processing queue is full. Please retry shortly.",
+                    "correlationId", correlationId
+            ));
         } catch (RuntimeException e) {
             throw new InfrastructureException("Failed to generate all-branch batch reports", e);
         }
