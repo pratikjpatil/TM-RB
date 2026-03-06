@@ -1,4 +1,4 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.support;
+package com.tcs.fincore.ReportBuilder.batch.application.util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;

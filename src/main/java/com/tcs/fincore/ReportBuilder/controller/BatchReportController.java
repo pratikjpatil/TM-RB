@@ -5,8 +5,9 @@
 package com.tcs.fincore.ReportBuilder.controller;
 
 import com.tcs.fincore.ReportBuilder.batch.orchestrator.BatchJobOrchestrator;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.controller.batch.dto.GenerateAllBranchesRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.exception.InfrastructureException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import lombok.RequiredArgsConstructor;
@@ -130,23 +131,22 @@ public class BatchReportController {
     }
 
     @PostMapping("/generate-all-branches")
-    public ResponseEntity<?> generateAllBranchReports(@RequestBody Map<String, Object> request) {
+    public ResponseEntity<?> generateAllBranchReports(@RequestBody GenerateAllBranchesRequest request) {
 
         String correlationId = UUID.randomUUID().toString();
         log.info("[{}] Received request to generate reports for all branches", correlationId);
 
         try {
-            String templateId = (String) request.get("templateId");
-            String variantCode = (String) request.get("variantCode");
-            String reportDate  = (String) request.get("reportDate");
+            String templateId = request.templateId();
+            String variantCode = request.variantCode();
+            String reportDate  = request.reportDate();
 
             if (templateId == null || templateId.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "status", "ERROR", "message", "templateId is required"));
             }
 
-            @SuppressWarnings("unchecked")
-            List<String> branchCodes = (List<String>) request.get("branchCodes");
+            List<String> branchCodes = request.branchCodes();
 
             if (branchCodes == null || branchCodes.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
@@ -197,13 +197,13 @@ public class BatchReportController {
 
         } catch (ValidationException e) {
             log.warn("All-branches request validation failed: correlationId={} jobId={} templateId={}",
-                    correlationId, "N/A", request.get("templateId"), e);
+                    correlationId, "N/A", request.templateId(), e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR", "message", e.getMessage()));
 
         } catch (TaskRejectedException e) {
             log.warn("All-branches submission rejected because async queue is full: correlationId={} templateId={}",
-                    correlationId, request.get("templateId"), e);
+                    correlationId, request.templateId(), e);
             return ResponseEntity.status(503).body(Map.of(
                     "status", "ERROR",
                     "message", "Batch processing queue is full. Please retry shortly.",

@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 public class ReportRuntimeService {
 
     private final GlobalParamEngine globalParamEngine;
+    private final GlobalParamResolver globalParamResolver;
     
     public void prepareRuntimeContext(
             ReportTemplate template,
@@ -161,7 +162,7 @@ public class ReportRuntimeService {
     @SuppressWarnings("unchecked")
     private void resolveTemplateGlobals(ReportTemplate template, Map<String, Object> context) {
         if (template.getReportMeta() != null && template.getReportMeta().getExtras() != null) {
-            Object resolvedExtras = GlobalParamResolver.resolveRecursive(
+            Object resolvedExtras = globalParamResolver.resolveRecursive(
                     template.getReportMeta().getExtras(),
                     context
             );
@@ -172,7 +173,7 @@ public class ReportRuntimeService {
         for (ReportTemplate.Row row : template.getReportData().getRows()) {
             if (row.getDynamicConfig() != null) {
                 row.setDynamicConfig((Map<String, Object>)
-                        GlobalParamResolver.resolveRecursive(row.getDynamicConfig(), context));
+                        globalParamResolver.resolveRecursive(row.getDynamicConfig(), context));
             }
 
             if (row.getCells() == null) continue;
@@ -181,21 +182,21 @@ public class ReportRuntimeService {
                 String type = cell.getType() != null ? cell.getType().toUpperCase() : "TEXT";
 
                 if ("TEXT".equals(type)) {
-                    cell.setValue(GlobalParamResolver.resolveValue(cell.getValue(), context));
+                    cell.setValue(globalParamResolver.resolveValue(cell.getValue(), context));
                 }
 
                 if (cell.getSource() != null) {
                     cell.setSource((Map<String, Object>)
-                            GlobalParamResolver.resolveRecursive(cell.getSource(), context));
+                            globalParamResolver.resolveRecursive(cell.getSource(), context));
                 }
 
                 if ("FORMULA".equals(type)) {
                     if (cell.getVariables() != null) {
                         cell.setVariables((Map<String, Object>)
-                                GlobalParamResolver.resolveRecursive(cell.getVariables(), context));
+                                globalParamResolver.resolveRecursive(cell.getVariables(), context));
                     }
 //                    if (cell.getExpression() != null && cell.getExpression().contains("$G{")) {
-//                        Object resolvedExpr = GlobalParamResolver.resolveValue(cell.getExpression(), context);
+//                        Object resolvedExpr = globalParamResolver.resolveValue(cell.getExpression(), context);
 //                        cell.setExpression(String.valueOf(resolvedExpr));
 //                    }
                     // 2. FIXED: Safe Interpolation for Formulas

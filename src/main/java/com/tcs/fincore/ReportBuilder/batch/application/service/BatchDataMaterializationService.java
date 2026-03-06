@@ -1,10 +1,11 @@
-package com.tcs.fincore.ReportBuilder.batch.orchestrator.support;
+package com.tcs.fincore.ReportBuilder.batch.application.service;
 
 import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.materializer.BatchDataMaterializer;
-import com.tcs.fincore.ReportBuilder.batch.orchestrator.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
+import com.tcs.fincore.ReportBuilder.batch.application.port.BatchDataMaterializationCoordinator;
 import com.tcs.fincore.ReportBuilder.batch.store.BatchResultStore;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,7 +18,7 @@ import java.util.function.Consumer;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class BatchDataMaterializationService {
+public class BatchDataMaterializationService implements BatchDataMaterializationCoordinator {
 
     private final BatchDataMaterializer dataMaterializer;
     private final BatchResultStore batchResultStore;

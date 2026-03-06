@@ -1,7 +1,7 @@
 package com.tcs.fincore.ReportBuilder.batch.analyzer;
 
 import com.tcs.fincore.ReportBuilder.batch.model.QueryPattern;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.exception.ReportProcessingException;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;

@@ -1,7 +1,7 @@
 package com.tcs.fincore.ReportBuilder.kafka.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

@@ -28,6 +28,7 @@ public class GlobalParamEngine {
 
     private final ParamTypeConverter typeConverter;
     private final DbResolver dbResolver;
+    private final GlobalParamResolver globalParamResolver;
 
     // Regex to find dependencies: matches "$G{VAR}" or "G.VAR"
     private static final Pattern REF_PATTERN = Pattern.compile("\\$G\\{([a-zA-Z0-9_]+)\\}|\\bG\\.([a-zA-Z0-9_]+)\\b");
@@ -103,7 +104,7 @@ public class GlobalParamEngine {
         // If not strict (Batch Analysis), check if all dependencies exist in context
         if (!strict && !canResolve(expr, context)) return null;
 
-        Object res = GlobalParamResolver.resolveValue(expr, context);
+        Object res = globalParamResolver.resolveValue(expr, context);
         return typeConverter.convert(res, def.getDataType(), def.getName());
     }
 
@@ -116,7 +117,7 @@ public class GlobalParamEngine {
         // We catch this to skip.
         Map<String, Object> resolvedFilters;
         try {
-            Object res = GlobalParamResolver.resolveRecursive(def.getSource().getFilters(), context);
+            Object res = globalParamResolver.resolveRecursive(def.getSource().getFilters(), context);
             resolvedFilters = (Map<String, Object>) res;
         } catch (RuntimeException e) {
             if (!strict) return null;

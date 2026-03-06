@@ -1,8 +1,8 @@
 package com.tcs.fincore.ReportBuilder.kafka.consumer;
 
 import com.tcs.fincore.ReportBuilder.batch.orchestrator.BatchJobOrchestrator;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobRequest;
-import com.tcs.fincore.ReportBuilder.dto.BatchJobStatus;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
+import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.kafka.dto.KafkaReportTriggerMessage;

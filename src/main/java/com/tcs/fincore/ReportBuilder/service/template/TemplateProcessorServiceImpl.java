@@ -25,13 +25,15 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
     private int maxDynamicRowLimit;
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final GlobalParamResolver globalParamResolver;
     private static final Set<String> VALID_ORDER_DIRECTIONS = Set.of("ASC", "DESC");
 
     @Value("${report.logo.path:/path/to/sbi-logo.png}")
     private String defaultLogoPath;
 
-    public TemplateProcessorServiceImpl(NamedParameterJdbcTemplate jdbc) {
+    public TemplateProcessorServiceImpl(NamedParameterJdbcTemplate jdbc, GlobalParamResolver globalParamResolver) {
         this.jdbc = jdbc;
+        this.globalParamResolver = globalParamResolver;
     }
 
     @Override
@@ -380,7 +382,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                 // We do NOT fail on missing deps here because the Varying Dimension (e.g. $G{BRANCH_CODE})
                 // will be missing (or set to placeholder) in staticContext.
                 Map<String, Object> resolvedSource = (Map<String, Object>)
-                        GlobalParamResolver.resolveRecursive(def.getSource(), staticContext);
+                        globalParamResolver.resolveRecursive(def.getSource(), staticContext);
 
                 // 2. Extract Fields
                 String table = (String) resolvedSource.get("table");

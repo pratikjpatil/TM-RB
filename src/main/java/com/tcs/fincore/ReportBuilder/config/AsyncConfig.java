@@ -69,4 +69,25 @@ public class AsyncConfig {
         
         return executor;
     }
+
+    /**
+     * Dedicated executor for batch report generation fan-out.
+     * Isolates single-mode async workloads from batch workloads.
+     */
+    @Bean(name = "batchReportGenerationExecutor")
+    public Executor batchReportGenerationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);
+        executor.setMaxPoolSize(60);
+        executor.setQueueCapacity(1000);
+        executor.setThreadNamePrefix("batch-report-gen-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+
+        log.info("Initialized batch report generation executor: core={}, max={}, queue={}",
+                executor.getCorePoolSize(), executor.getMaxPoolSize(), executor.getQueueCapacity());
+        return executor;
+    }
 }

@@ -5,7 +5,7 @@
 // MODIFIED: Added executionContext field to carry trigger source and correlation IDs.
 // All existing fields and their behaviour are unchanged.
 
-package com.tcs.fincore.ReportBuilder.dto;
+package com.tcs.fincore.ReportBuilder.batch.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
