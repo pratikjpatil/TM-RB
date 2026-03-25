@@ -38,6 +38,7 @@ public class BatchReportStorageService {
     private String defaultHdfsBasePath;
 
     public void saveReports(String basePath,
+                            LocalDate storageDate,
                             Map<String, Object> commonParams,
                             String varyingParamName,
                             String dimensionValue,
@@ -55,7 +56,7 @@ public class BatchReportStorageService {
         Path directory = storagePathService.ensureDateBasedReportDirectory(
                 hdfsFileSystem,
                 resolveBasePath(basePath),
-                LocalDate.now(),
+                storageDate,
                 safeReportId,
                 safeDimensionValue);
 

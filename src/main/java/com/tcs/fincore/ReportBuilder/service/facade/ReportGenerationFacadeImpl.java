@@ -14,6 +14,7 @@ import com.tcs.fincore.ReportBuilder.service.export.ReportExporter;
 import com.tcs.fincore.ReportBuilder.service.metadata.ReportMetadataService;
 import com.tcs.fincore.ReportBuilder.service.pipeline.ReportExecutionService;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
+import com.tcs.fincore.ReportBuilder.service.storage.ReportExecutionDateResolver;
 import com.tcs.fincore.ReportBuilder.service.storage.ReportStoragePathService;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 import com.tcs.fincore.ReportBuilder.util.FileStorageUtil;
@@ -45,6 +46,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     private final FileSystem hdfsFileSystem;
     private final ReportEventPublisher eventPublisher;
     private final ReportStoragePathService storagePathService;
+    private final ReportExecutionDateResolver reportExecutionDateResolver;
 
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
@@ -118,15 +120,18 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             // 2. Execute report pipeline
             ExportModel model = executionService.generateModelOnly(reportCtx.template());
 
-            // 3. Resolve HDFS directory: basePath/date/reportId/
-            String reportId  = reportCtx.template().getReportMeta().getReportId();
-            Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, LocalDate.now(), reportId);
+            // 3. Resolve storage date from payload/variant; fallback to FINCORE_ETL_DATE
+            LocalDate storageDate = reportExecutionDateResolver.resolveStorageDate(request.getParams(), reportCtx.variant());
 
-            // 4. Build file name (without extension — added per-format)
+            // 4. Resolve HDFS directory: basePath/date/reportId/
+            String reportId  = reportCtx.template().getReportMeta().getReportId();
+            Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, storageDate, reportId);
+
+            // 5. Build file name (without extension — added per-format)
             String fileName = ReportFileNameUtil.buildFileName(
                     reportCtx.template(), reportCtx.variant(), request.getParams());
 
-            // 5. Export and persist all requested formats
+            // 6. Export and persist all requested formats
             List<String> formats = resolveFormats();
             int successCount = 0;
             int failureCount = 0;
@@ -152,7 +157,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
                 }
             }
 
-            // 6. Log summary
+            // 7. Log summary
             if (failureCount > 0) {
                 log.warn("Single-mode HDFS storage completed with errors: {}/{} formats succeeded. jobId={}",
                         successCount, formats.size(), jobId);
