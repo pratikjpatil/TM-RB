@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -93,15 +94,15 @@ public class ReportController {
             // Build a matching jobId for the response using the same pattern the facade uses
             String jobId = "single_" + request.getReportId() + "_" + System.currentTimeMillis();
 
-            return ResponseEntity.accepted()
-                    .body(Map.of(
-                            "status",      "ACCEPTED",
-                            "message",     "Single-mode report generation initiated asynchronously",
-                            "jobId",       jobId,
-                            "reportId",    request.getReportId(),
-                            "templateId",  request.getTemplateId(),
-                            "variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default"
-                    ));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "ACCEPTED");
+            response.put("message", "Single-mode report generation initiated asynchronously");
+            response.put("jobId", jobId);
+            response.put("reportId", request.getReportId());
+            response.put("templateId", request.getTemplateId());
+            response.put("variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default");
+
+            return ResponseEntity.accepted().body(response);
 
         } catch (ValidationException e) {
             log.warn("Validation failure for HDFS generation: correlationId={} jobId={} reportId={} templateId={}",
