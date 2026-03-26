@@ -189,12 +189,33 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     private record ReportContext(ReportTemplate template, ReportVariant variant, String reportId, String templateId) {}
 
     private ReportContext prepareReportContext(ReportViewRequest request) {
-        if (request.getReportId() == null || request.getReportId().isBlank()) {
-            throw new ValidationException("reportId is required");
+        if ((request.getReportId() == null || request.getReportId().isBlank())
+                && (request.getTemplateId() == null || request.getTemplateId().isBlank())) {
+            throw new ValidationException("Either reportId or templateId is required");
         }
-        ReportTemplate rawTemplate = metadataService.getTemplateByReportId(request.getReportId());
-        String templateId = metadataService.findTemplateIdByReportId(request.getReportId());
-        String reportId = rawTemplate.getReportMeta() != null ? rawTemplate.getReportMeta().getReportId() : request.getReportId();
+
+        String reportId = request.getReportId();
+        String templateId = request.getTemplateId();
+        ReportTemplate rawTemplate;
+
+        if (reportId != null && !reportId.isBlank()) {
+            rawTemplate = metadataService.getTemplateByReportId(reportId);
+            if (templateId == null || templateId.isBlank()) {
+                templateId = metadataService.findTemplateIdByReportId(reportId);
+            }
+        } else {
+            rawTemplate = metadataService.getTemplate(templateId);
+            if (rawTemplate.getReportMeta() == null
+                    || rawTemplate.getReportMeta().getReportId() == null
+                    || rawTemplate.getReportMeta().getReportId().isBlank()) {
+                throw new ValidationException("Unable to resolve reportId from templateId: " + templateId);
+            }
+            reportId = rawTemplate.getReportMeta().getReportId();
+        }
+
+        if (templateId == null || templateId.isBlank()) {
+            throw new ValidationException("Unable to resolve templateId");
+        }
 
         // Deep copy is critical: the runtime service mutates the template (injects filters,
         // replaces placeholders) and the original is cached — never modify the cached instance.
@@ -267,6 +288,13 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             return String.join("_",
                     context.getProcessRunId(), context.getStageId(), context.getRunId());
         }
-        return "single_" + request.getReportId() + "_" + System.currentTimeMillis();
+        String id = request.getReportId();
+        if (id == null || id.isBlank()) {
+            id = request.getTemplateId();
+        }
+        if (id == null || id.isBlank()) {
+            id = "unknown";
+        }
+        return "single_" + id + "_" + System.currentTimeMillis();
     }
 }

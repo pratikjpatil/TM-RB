@@ -101,10 +101,7 @@ public class BatchJobOrchestrator {
     }
 
     public BatchJobStatus submitJob(BatchJobRequest request, ReportExecutionContext context) {
-        if (request.getReportId() != null && !request.getReportId().isBlank()) {
-            String resolvedTemplateId = reportMetadataService.findTemplateIdByReportId(request.getReportId());
-            request.setTemplateId(resolvedTemplateId);
-        }
+        resolveReportAndTemplateIds(request);
 
         if (request.getJobId() == null || request.getJobId().isBlank()) {
             request.setJobId(generateJobId(request));
@@ -274,8 +271,12 @@ public class BatchJobOrchestrator {
     }
 
     private void validateRequest(BatchJobRequest request) {
+        if ((request.getReportId() == null || request.getReportId().isBlank())
+                && (request.getTemplateId() == null || request.getTemplateId().isBlank())) {
+            throw new ValidationException("Either reportId or templateId is required");
+        }
         if (request.getReportId() == null || request.getReportId().isBlank()) {
-            throw new ValidationException("reportId is required");
+            throw new ValidationException("reportId could not be resolved from templateId");
         }
         if (request.getTemplateId() == null || request.getTemplateId().isBlank()) {
             throw new ValidationException("templateId could not be resolved from reportId");
@@ -346,6 +347,25 @@ public class BatchJobOrchestrator {
 
         log.info("Job {} stopped — cancelled flag was set", jobId);
         persistStatus(status, true);
+    }
+
+    private void resolveReportAndTemplateIds(BatchJobRequest request) {
+        String reportId = request.getReportId();
+        String templateId = request.getTemplateId();
+
+        if (reportId != null && !reportId.isBlank()) {
+            if (templateId == null || templateId.isBlank()) {
+                request.setTemplateId(reportMetadataService.findTemplateIdByReportId(reportId));
+            }
+            return;
+        }
+
+        if (templateId != null && !templateId.isBlank()) {
+            var template = reportMetadataService.getTemplate(templateId);
+            if (template != null && template.getReportMeta() != null) {
+                request.setReportId(template.getReportMeta().getReportId());
+            }
+        }
     }
 
     private String generateJobId(BatchJobRequest request) {

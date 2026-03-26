@@ -137,12 +137,14 @@ public class BatchReportController {
 
         try {
             String reportId = request.reportId();
+            String templateId = request.templateId();
             String variantCode = request.variantCode();
             String reportDate  = request.reportDate();
 
-            if (reportId == null || reportId.isBlank()) {
+            if ((reportId == null || reportId.isBlank())
+                    && (templateId == null || templateId.isBlank())) {
                 return ResponseEntity.badRequest().body(Map.of(
-                        "status", "ERROR", "message", "reportId is required"));
+                        "status", "ERROR", "message", "Either reportId or templateId is required"));
             }
 
             List<String> branchCodes = request.branchCodes();
@@ -171,7 +173,7 @@ public class BatchReportController {
 
             BatchJobRequest batchRequest = new BatchJobRequest();
             batchRequest.setReportId(reportId);
-            batchRequest.setTemplateId(request.templateId());
+            batchRequest.setTemplateId(templateId);
             batchRequest.setVariantCode(variantCode);
             batchRequest.setCommonParams(Map.of("reportDate", reportDate));
 

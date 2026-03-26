@@ -76,12 +76,13 @@ public class ReportController {
 
         try {
             // Validate required fields before handing off to async pipeline
-            if (request.getReportId() == null || request.getReportId().isBlank()) {
+            if ((request.getReportId() == null || request.getReportId().isBlank())
+                    && (request.getTemplateId() == null || request.getTemplateId().isBlank())) {
                 return ResponseEntity
                         .badRequest()
                         .body(Map.of(
                                 "status", "ERROR",
-                                "message", "reportId is required"
+                                "message", "Either reportId or templateId is required"
                         ));
             }
 
@@ -92,7 +93,10 @@ public class ReportController {
             reportFacade.generateAndStoreToHdfs(request, context);
 
             // Build a matching jobId for the response using the same pattern the facade uses
-            String jobId = "single_" + request.getReportId() + "_" + System.currentTimeMillis();
+            String idForJob = (request.getReportId() != null && !request.getReportId().isBlank())
+                    ? request.getReportId()
+                    : request.getTemplateId();
+            String jobId = "single_" + idForJob + "_" + System.currentTimeMillis();
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("status", "ACCEPTED");
