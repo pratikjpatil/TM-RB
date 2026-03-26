@@ -42,6 +42,7 @@ public interface ReportEventPublisher {
      */
     void publishSingleStarted(ReportExecutionContext context,
                               String jobId,
+                              String reportId,
                               String templateId,
                               String variantCode);
 
@@ -56,12 +57,14 @@ public interface ReportEventPublisher {
      */
     void publishSingleCompleted(ReportExecutionContext context,
                                 String jobId,
+                                String reportId,
                                 String templateId,
                                 String variantCode,
                                 Instant jobStartTime);
 
     void publishSingleFailed(ReportExecutionContext context,
                              String jobId,
+                             String reportId,
                              String templateId,
                              String variantCode,
                              String errorMessage,

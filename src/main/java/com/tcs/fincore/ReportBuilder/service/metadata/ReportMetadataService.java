@@ -5,5 +5,7 @@ import com.tcs.fincore.ReportBuilder.model.variant.ReportVariant;
 
 public interface ReportMetadataService {
     ReportTemplate getTemplate(String templateId);
+    ReportTemplate getTemplateByReportId(String reportId);
+    String findTemplateIdByReportId(String reportId);
     ReportVariant getVariant(String templateId, String variantCode);
 }

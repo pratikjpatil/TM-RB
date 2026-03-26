@@ -72,8 +72,8 @@ public class SingleModeReportGenerationConsumer {
         ReportViewRequest request = message.getPayload();
         String compositeJobId = message.toCompositeJobId();
 
-        log.info("Submitting Kafka-triggered single-mode job: jobId={} templateId={} variant={}",
-                compositeJobId, request.getTemplateId(), request.getVariantCode());
+        log.info("Submitting Kafka-triggered single-mode job: jobId={} reportId={} templateId={} variant={}",
+                compositeJobId, request.getReportId(), request.getTemplateId(), request.getVariantCode());
 
         // -- Step 4: Delegate to facade (runs @Async) -------------------------
         try {

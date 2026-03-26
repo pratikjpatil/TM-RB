@@ -91,6 +91,7 @@ public class RedisBatchJobStatusStore implements BatchJobStatusStore {
 
         return BatchJobStatus.builder()
                 .jobId(status.getJobId())
+                .reportId(status.getReportId())
                 .templateId(status.getTemplateId())
                 .variantCode(status.getVariantCode())
                 .currentPhase(status.getCurrentPhase())

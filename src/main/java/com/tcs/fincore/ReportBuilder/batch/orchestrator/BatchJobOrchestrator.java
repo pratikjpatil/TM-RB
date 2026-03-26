@@ -13,6 +13,7 @@ import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 import com.tcs.fincore.ReportBuilder.kafka.publisher.ReportEventPublisher;
+import com.tcs.fincore.ReportBuilder.service.metadata.ReportMetadataService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,7 @@ public class BatchJobOrchestrator {
     private final BatchResultStore batchResultStore;
     private final ResultDistributor resultDistributor;
     private final ReportEventPublisher eventPublisher;
+    private final ReportMetadataService reportMetadataService;
     @Qualifier("batchReportGenerationExecutor")
     private final ThreadPoolTaskExecutor reportGenerationExecutor;
 
@@ -99,6 +101,11 @@ public class BatchJobOrchestrator {
     }
 
     public BatchJobStatus submitJob(BatchJobRequest request, ReportExecutionContext context) {
+        if (request.getReportId() != null && !request.getReportId().isBlank()) {
+            String resolvedTemplateId = reportMetadataService.findTemplateIdByReportId(request.getReportId());
+            request.setTemplateId(resolvedTemplateId);
+        }
+
         if (request.getJobId() == null || request.getJobId().isBlank()) {
             request.setJobId(generateJobId(request));
         }
@@ -267,8 +274,11 @@ public class BatchJobOrchestrator {
     }
 
     private void validateRequest(BatchJobRequest request) {
+        if (request.getReportId() == null || request.getReportId().isBlank()) {
+            throw new ValidationException("reportId is required");
+        }
         if (request.getTemplateId() == null || request.getTemplateId().isBlank()) {
-            throw new ValidationException("templateId is required");
+            throw new ValidationException("templateId could not be resolved from reportId");
         }
         if (request.getVariantCode() == null || request.getVariantCode().isBlank()) {
             throw new ValidationException("variantCode is required");
@@ -340,7 +350,7 @@ public class BatchJobOrchestrator {
 
     private String generateJobId(BatchJobRequest request) {
         return String.format("%s_%s_%s",
-                request.getTemplateId(),
+                request.getReportId(),
                 request.getVaryingDimension().getParamName(),
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")));
     }
@@ -348,6 +358,7 @@ public class BatchJobOrchestrator {
     private BatchJobStatus createInitialStatus(BatchJobRequest request) {
         return BatchJobStatus.builder()
                 .jobId(request.getJobId())
+                .reportId(request.getReportId())
                 .templateId(request.getTemplateId())
                 .variantCode(request.getVariantCode())
                 .currentPhase(BatchJobStatus.JobPhase.SUBMITTED)

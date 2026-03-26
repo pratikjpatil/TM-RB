@@ -60,8 +60,8 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
     @Override
     public ReportFileResponse generateReportFile(ReportViewRequest request, String formatType) {
-        log.info("Starting synchronous report generation: template={}, variant={}, format={}",
-                request.getTemplateId(), request.getVariantCode(), formatType);
+        log.info("Starting synchronous report generation: reportId={}, templateId={}, variant={}, format={}",
+                request.getReportId(), request.getTemplateId(), request.getVariantCode(), formatType);
 
         try {
             ReportContext context = prepareReportContext(request);
@@ -81,8 +81,8 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
         } catch (ValidationException e) {
             throw e;
         } catch (RuntimeException e) {
-            log.error("Synchronous generation failed: jobId={} templateId={} correlationId={} errorType={}",
-                    "N/A", request.getTemplateId(), "N/A", e.getClass().getSimpleName(), e);
+            log.error("Synchronous generation failed: jobId={} reportId={} templateId={} correlationId={} errorType={}",
+                    "N/A", request.getReportId(), request.getTemplateId(), "N/A", e.getClass().getSimpleName(), e);
             throw new ReportProcessingException("Synchronous report generation failed", e);
         }
     }
@@ -103,26 +103,27 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     @Async("reportExecutor")
     public void generateAndStoreToHdfs(ReportViewRequest request, ReportExecutionContext executionContext) {
         Instant jobStartTime = Instant.now();
-        String jobId   = resolveJobId(request, executionContext);
-        String templateId   = request.getTemplateId();
-        String variantCode  = request.getVariantCode();
+        String jobId = resolveJobId(request, executionContext);
+        String variantCode = request.getVariantCode();
+        String reportIdFromRequest = request.getReportId();
 
-        log.info("Starting async single-mode HDFS generation: jobId={} templateId={} variant={}",
-                jobId, templateId, variantCode);
+        log.info("Starting async single-mode HDFS generation: jobId={} reportId={} templateId={} variant={}",
+                jobId, reportIdFromRequest, request.getTemplateId(), variantCode);
 
         // -- Publish STARTED event (Kafka-triggered jobs only) -----------------
-        eventPublisher.publishSingleStarted(executionContext, jobId, templateId, variantCode);
+        eventPublisher.publishSingleStarted(executionContext, jobId, reportIdFromRequest, request.getTemplateId(), variantCode);
 
         try {
             // 1. Prepare data
             ReportContext reportCtx = prepareReportContext(request);
+            String templateId = reportCtx.templateId();
+            String reportId = reportCtx.reportId();
 
             // 2. Execute report pipeline
             ExportModel model = executionService.generateModelOnly(reportCtx.template());
 
             // 3. Resolve HDFS directory: basePath/date/reportId/
             LocalDate storageDate = reportExecutionDateResolver.resolveStorageDate(request.getParams(), reportCtx.variant());
-            String reportId  = reportCtx.template().getReportMeta().getReportId();
             Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, storageDate, reportId);
 
             // 4. Build file name (without extension — added per-format)
@@ -151,7 +152,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
                 } catch (Exception e) {
                     failureCount++;
                     log.error("Failed to store export artifact: jobId={} templateId={} correlationId={} format={} errorType={}",
-                            jobId, templateId, "N/A", format, e.getClass().getSimpleName(), e);
+                            jobId, reportId, templateId, "N/A", format, e.getClass().getSimpleName(), e);
                 }
             }
 
@@ -165,15 +166,15 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             }
 
             // -- Publish COMPLETED event (Kafka-triggered jobs only) -----------
-            eventPublisher.publishSingleCompleted(executionContext, jobId, templateId, variantCode, jobStartTime);
+            eventPublisher.publishSingleCompleted(executionContext, jobId, reportId, templateId, variantCode, jobStartTime);
 
         } catch (Exception e) {
-            log.error("Single-mode HDFS generation failed: jobId={} templateId={} correlationId={} errorType={}",
-                    jobId, templateId, "N/A", e.getClass().getSimpleName(), e);
+            log.error("Single-mode HDFS generation failed: jobId={} reportId={} templateId={} correlationId={} errorType={}",
+                    jobId, request.getReportId(), request.getTemplateId(), "N/A", e.getClass().getSimpleName(), e);
 
             // -- Publish FAILED event (Kafka-triggered jobs only) --------------
             eventPublisher.publishSingleFailed(
-                    executionContext, jobId, templateId, variantCode,
+                    executionContext, jobId, request.getReportId(), request.getTemplateId(), variantCode,
                     "Single-mode generation failed", e.getClass().getSimpleName(), jobStartTime);
 
             // Re-throw so @Async captures it and Kafka consumer can detect failure
@@ -185,10 +186,15 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     // Internal helpers
     // =========================================================================
 
-    private record ReportContext(ReportTemplate template, ReportVariant variant) {}
+    private record ReportContext(ReportTemplate template, ReportVariant variant, String reportId, String templateId) {}
 
     private ReportContext prepareReportContext(ReportViewRequest request) {
-        ReportTemplate rawTemplate = metadataService.getTemplate(request.getTemplateId());
+        if (request.getReportId() == null || request.getReportId().isBlank()) {
+            throw new ValidationException("reportId is required");
+        }
+        ReportTemplate rawTemplate = metadataService.getTemplateByReportId(request.getReportId());
+        String templateId = metadataService.findTemplateIdByReportId(request.getReportId());
+        String reportId = rawTemplate.getReportMeta() != null ? rawTemplate.getReportMeta().getReportId() : request.getReportId();
 
         // Deep copy is critical: the runtime service mutates the template (injects filters,
         // replaces placeholders) and the original is cached — never modify the cached instance.
@@ -196,11 +202,11 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
 
         ReportVariant variant = null;
         if (request.getVariantCode() != null && !request.getVariantCode().isBlank()) {
-            variant = metadataService.getVariant(request.getTemplateId(), request.getVariantCode());
+            variant = metadataService.getVariant(templateId, request.getVariantCode());
         }
 
         runtimeService.prepareRuntimeContext(runtimeTemplate, variant, request.getParams());
-        return new ReportContext(runtimeTemplate, variant);
+        return new ReportContext(runtimeTemplate, variant, reportId, templateId);
     }
 
     private ReportTemplate deepCopyTemplate(ReportTemplate original) {
@@ -261,6 +267,6 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             return String.join("_",
                     context.getProcessRunId(), context.getStageId(), context.getRunId());
         }
-        return "single_" + request.getTemplateId() + "_" + System.currentTimeMillis();
+        return "single_" + request.getReportId() + "_" + System.currentTimeMillis();
     }
 }
