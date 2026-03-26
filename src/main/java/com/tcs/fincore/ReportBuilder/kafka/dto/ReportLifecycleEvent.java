@@ -21,6 +21,7 @@ public class ReportLifecycleEvent {
     /** Composite job ID derived from the three correlation IDs. */
     String jobId;
 
+    String reportId;
     String templateId;
     String variantCode;
 
@@ -47,6 +48,7 @@ public class ReportLifecycleEvent {
     public static ReportLifecycleEvent started(
             ReportExecutionContext ctx,
             String jobId,
+            String reportId,
             String templateId,
             String variantCode) {
 
@@ -55,6 +57,7 @@ public class ReportLifecycleEvent {
                 .stageId(ctx.getStageId())
                 .runId(ctx.getRunId())
                 .jobId(jobId)
+                .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
                 .eventType(EventType.JOB_STARTED)
@@ -67,6 +70,7 @@ public class ReportLifecycleEvent {
     public static ReportLifecycleEvent completed(
             ReportExecutionContext ctx,
             String jobId,
+            String reportId,
             String templateId,
             String variantCode,
             int totalReports,
@@ -79,6 +83,7 @@ public class ReportLifecycleEvent {
                 .stageId(ctx.getStageId())
                 .runId(ctx.getRunId())
                 .jobId(jobId)
+                .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
                 .eventType(EventType.JOB_COMPLETED)
@@ -97,6 +102,7 @@ public class ReportLifecycleEvent {
     public static ReportLifecycleEvent failed(
             ReportExecutionContext ctx,
             String jobId,
+            String reportId,
             String templateId,
             String variantCode,
             String errorMessage,
@@ -108,6 +114,7 @@ public class ReportLifecycleEvent {
                 .stageId(ctx.getStageId())
                 .runId(ctx.getRunId())
                 .jobId(jobId)
+                .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
                 .eventType(EventType.JOB_FAILED)

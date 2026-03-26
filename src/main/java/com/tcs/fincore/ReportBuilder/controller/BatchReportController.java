@@ -29,8 +29,9 @@ public class BatchReportController {
     public ResponseEntity<?> submitBatchJob(@RequestBody BatchJobRequest request) {
 
         String correlationId = UUID.randomUUID().toString();
-        log.info("[{}] Received batch job submission: template={}, variant={}, reports={}",
+        log.info("[{}] Received batch job submission: reportId={}, template={}, variant={}, reports={}",
                 correlationId,
+                request.getReportId(),
                 request.getTemplateId(),
                 request.getVariantCode(),
                 request.getVaryingDimension() != null ?
@@ -42,14 +43,16 @@ public class BatchReportController {
                     "status", "ACCEPTED",
                     "message", "Batch job submitted successfully",
                     "jobId", status.getJobId(),
+                    "reportId", status.getReportId(),
+                    "templateId", status.getTemplateId(),
                     "totalReports", status.getProgress().getTotalReports(),
                     "trackingUrl", "/api/report-builder/batch/status/" + status.getJobId()
             ));
 
         } catch (ValidationException e) {
 
-            log.warn("Batch submission validation failed: correlationId={} jobId={} templateId={}",
-                    correlationId, "N/A", request.getTemplateId(), e);
+            log.warn("Batch submission validation failed: correlationId={} jobId={} reportId={} templateId={}",
+                    correlationId, "N/A", request.getReportId(), request.getTemplateId(), e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
@@ -57,8 +60,8 @@ public class BatchReportController {
             ));
 
         } catch (TaskRejectedException e) {
-            log.warn("Batch submission rejected because async queue is full: correlationId={} templateId={}",
-                    correlationId, request.getTemplateId(), e);
+            log.warn("Batch submission rejected because async queue is full: correlationId={} reportId={} templateId={}",
+                    correlationId, request.getReportId(), request.getTemplateId(), e);
             return ResponseEntity.status(503).body(Map.of(
                     "status", "ERROR",
                     "message", "Batch processing queue is full. Please retry shortly.",
@@ -133,13 +136,13 @@ public class BatchReportController {
         log.info("[{}] Received request to generate reports for all branches", correlationId);
 
         try {
-            String templateId = request.templateId();
+            String reportId = request.reportId();
             String variantCode = request.variantCode();
             String reportDate  = request.reportDate();
 
-            if (templateId == null || templateId.isBlank()) {
+            if (reportId == null || reportId.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of(
-                        "status", "ERROR", "message", "templateId is required"));
+                        "status", "ERROR", "message", "reportId is required"));
             }
 
             List<String> branchCodes = request.branchCodes();
@@ -167,7 +170,8 @@ public class BatchReportController {
             }
 
             BatchJobRequest batchRequest = new BatchJobRequest();
-            batchRequest.setTemplateId(templateId);
+            batchRequest.setReportId(reportId);
+            batchRequest.setTemplateId(request.templateId());
             batchRequest.setVariantCode(variantCode);
             batchRequest.setCommonParams(Map.of("reportDate", reportDate));
 
@@ -187,19 +191,21 @@ public class BatchReportController {
                     "status", "ACCEPTED",
                     "message", "Batch job submitted for all branches",
                     "jobId", status.getJobId(),
+                    "reportId", status.getReportId(),
+                    "templateId", status.getTemplateId(),
                     "totalBranches", branchCodes.size(),
                     "trackingUrl", "/api/report-builder/batch/status/" + status.getJobId()
             ));
 
         } catch (ValidationException e) {
-            log.warn("All-branches request validation failed: correlationId={} jobId={} templateId={}",
-                    correlationId, "N/A", request.templateId(), e);
+            log.warn("All-branches request validation failed: correlationId={} jobId={} reportId={} templateId={}",
+                    correlationId, "N/A", request.reportId(), request.templateId(), e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR", "message", e.getMessage()));
 
         } catch (TaskRejectedException e) {
-            log.warn("All-branches submission rejected because async queue is full: correlationId={} templateId={}",
-                    correlationId, request.templateId(), e);
+            log.warn("All-branches submission rejected because async queue is full: correlationId={} reportId={} templateId={}",
+                    correlationId, request.reportId(), request.templateId(), e);
             return ResponseEntity.status(503).body(Map.of(
                     "status", "ERROR",
                     "message", "Batch processing queue is full. Please retry shortly.",

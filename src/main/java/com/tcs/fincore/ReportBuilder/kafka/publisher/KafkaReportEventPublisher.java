@@ -55,6 +55,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
         ReportLifecycleEvent event = ReportLifecycleEvent.started(
                 context,
                 status.getJobId(),
+                status.getReportId(),
                 status.getTemplateId(),
                 status.getVariantCode());
 
@@ -78,12 +79,13 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
     @Override
     public void publishSingleStarted(ReportExecutionContext context,
                                      String jobId,
+                                     String reportId,
                                      String templateId,
                                      String variantCode) {
         if (!shouldPublish(context)) return;
 
         ReportLifecycleEvent event = ReportLifecycleEvent.started(
-                context, jobId, templateId, variantCode);
+                context, jobId, reportId, templateId, variantCode);
 
         send(singleStartedTopic, event);
     }
@@ -91,6 +93,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
     @Override
     public void publishSingleCompleted(ReportExecutionContext context,
                                        String jobId,
+                                       String reportId,
                                        String templateId,
                                        String variantCode,
                                        Instant jobStartTime) {
@@ -98,7 +101,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
 
         // Single mode = exactly 1 report, no partial completions
         ReportLifecycleEvent event = ReportLifecycleEvent.completed(
-                context, jobId, templateId, variantCode,
+                context, jobId, reportId, templateId, variantCode,
                 /* totalReports   */ 1,
                 /* completedReports */ 1,
                 /* failedReports  */ 0,
@@ -110,6 +113,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
     @Override
     public void publishSingleFailed(ReportExecutionContext context,
                                     String jobId,
+                                    String reportId,
                                     String templateId,
                                     String variantCode,
                                     String errorMessage,
@@ -118,7 +122,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
         if (!shouldPublish(context)) return;
 
         ReportLifecycleEvent event = ReportLifecycleEvent.failed(
-                context, jobId, templateId, variantCode,
+                context, jobId, reportId, templateId, variantCode,
                 errorMessage, errorType, jobStartTime);
 
         send(singleCompletedTopic, event);
@@ -170,6 +174,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
             return ReportLifecycleEvent.failed(
                     context,
                     status.getJobId(),
+                    status.getReportId(),
                     status.getTemplateId(),
                     status.getVariantCode(),
                     status.getErrors() != null ? status.getErrors().getLastErrorMessage() : "Unknown error",
@@ -185,6 +190,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
         return ReportLifecycleEvent.completed(
                 context,
                 status.getJobId(),
+                status.getReportId(),
                 status.getTemplateId(),
                 status.getVariantCode(),
                 total, completed, failed,

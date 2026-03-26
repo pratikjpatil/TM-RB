@@ -42,6 +42,21 @@ public class ReportMetadataServiceImpl implements ReportMetadataService {
         return template;
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    @Cacheable(value = "reportTemplates", key = "'reportId:' + #reportId", unless = "#result == null")
+    public ReportTemplate getTemplateByReportId(String reportId) {
+        log.info("CACHE MISS - Loading template from DB using reportId: {}", reportId);
+        return templateRepository.loadActiveTemplateByReportId(reportId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    @Cacheable(value = "reportTemplates", key = "'templateIdByReportId:' + #reportId", unless = "#result == null")
+    public String findTemplateIdByReportId(String reportId) {
+        return templateRepository.findActiveTemplateIdByReportId(reportId);
+    }
+
     /**
      * Added Redis caching with 5-minute TTL
      * Cache key: templateId:variantCode

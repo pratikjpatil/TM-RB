@@ -18,6 +18,7 @@ import java.util.Map;
 public class BatchJobRequest {
 
     private String jobId;                // Optional: auto-generated if not provided
+    private String reportId;             // Report to use
     private String templateId;           // Template to use
     private String variantCode;          // Variant code (e.g., BRANCH_WISE)
 

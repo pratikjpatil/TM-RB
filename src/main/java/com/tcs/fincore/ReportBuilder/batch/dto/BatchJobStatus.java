@@ -19,6 +19,7 @@ import java.util.Set;
 public class BatchJobStatus {
 
     private String jobId;
+    private String reportId;
     private String templateId;
     private String variantCode;
 

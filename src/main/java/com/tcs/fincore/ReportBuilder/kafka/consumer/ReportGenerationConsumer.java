@@ -71,8 +71,8 @@ public class ReportGenerationConsumer {
         String compositeJobId = message.toCompositeJobId();
         request.setJobId(compositeJobId);
 
-        log.info("Submitting Kafka-triggered batch job: jobId={} templateId={} variant={}",
-                compositeJobId, request.getTemplateId(), request.getVariantCode());
+        log.info("Submitting Kafka-triggered batch job: jobId={} reportId={} templateId={} variant={}",
+                compositeJobId, request.getReportId(), request.getTemplateId(), request.getVariantCode());
 
         // -- Step 4: Submit to orchestrator -------------------------------------
         try {

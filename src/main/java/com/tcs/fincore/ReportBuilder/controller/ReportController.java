@@ -34,10 +34,10 @@ public class ReportController {
             @PathVariable String format, 
             @RequestBody ReportViewRequest request) {
         String correlationId = UUID.randomUUID().toString();
-        String templateId = request != null ? request.getTemplateId() : null;
+        String reportId = request != null ? request.getReportId() : null;
 
-        log.info("View report request received: correlationId={} jobId={} templateId={} variantCode={} format={}",
-                correlationId, "N/A", templateId, request.getVariantCode(), format);
+        log.info("View report request received: correlationId={} jobId={} reportId={} templateId={} variantCode={} format={}",
+                correlationId, "N/A", reportId, request.getTemplateId(), request.getVariantCode(), format);
 
         try {
             ReportFileResponse response = reportFacade.generateReportFile(request, format);
@@ -53,8 +53,8 @@ public class ReportController {
                     .body(response.getContent());
                     
         } catch (ValidationException e) {
-            log.warn("Validation failure in view report: correlationId={} jobId={} templateId={}",
-                    correlationId, "N/A", templateId, e);
+            log.warn("Validation failure in view report: correlationId={} jobId={} reportId={} templateId={}",
+                    correlationId, "N/A", reportId, request != null ? request.getTemplateId() : null, e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
@@ -69,18 +69,18 @@ public class ReportController {
     @PostMapping("/generate-for-hdfs")
     public ResponseEntity<?> generateForHdfs(@RequestBody ReportViewRequest request) {
         String correlationId = UUID.randomUUID().toString();
-        String templateId = request != null ? request.getTemplateId() : null;
-        log.info("Received single-mode HDFS generation request: templateId={}, variant={}",
-                request.getTemplateId(), request.getVariantCode());
+        String reportId = request != null ? request.getReportId() : null;
+        log.info("Received single-mode HDFS generation request: reportId={}, templateId={}, variant={}",
+                request.getReportId(), request.getTemplateId(), request.getVariantCode());
 
         try {
             // Validate required fields before handing off to async pipeline
-            if (request.getTemplateId() == null || request.getTemplateId().isBlank()) {
+            if (request.getReportId() == null || request.getReportId().isBlank()) {
                 return ResponseEntity
                         .badRequest()
                         .body(Map.of(
                                 "status", "ERROR",
-                                "message", "templateId is required"
+                                "message", "reportId is required"
                         ));
             }
 
@@ -91,28 +91,29 @@ public class ReportController {
             reportFacade.generateAndStoreToHdfs(request, context);
 
             // Build a matching jobId for the response using the same pattern the facade uses
-            String jobId = "single_" + request.getTemplateId() + "_" + System.currentTimeMillis();
+            String jobId = "single_" + request.getReportId() + "_" + System.currentTimeMillis();
 
             return ResponseEntity.accepted()
                     .body(Map.of(
                             "status",      "ACCEPTED",
                             "message",     "Single-mode report generation initiated asynchronously",
                             "jobId",       jobId,
+                            "reportId",    request.getReportId(),
                             "templateId",  request.getTemplateId(),
                             "variantCode", request.getVariantCode() != null ? request.getVariantCode() : "default"
                     ));
 
         } catch (ValidationException e) {
-            log.warn("Validation failure for HDFS generation: correlationId={} jobId={} templateId={}",
-                    correlationId, "N/A", templateId, e);
+            log.warn("Validation failure for HDFS generation: correlationId={} jobId={} reportId={} templateId={}",
+                    correlationId, "N/A", reportId, request != null ? request.getTemplateId() : null, e);
             return ResponseEntity.badRequest().body(Map.of(
                     "status", "ERROR",
                     "message", e.getMessage(),
                     "correlationId", correlationId
             ));
         } catch (TaskRejectedException e) {
-            log.warn("Async executor saturated for single-mode HDFS generation: correlationId={} templateId={}",
-                    correlationId, templateId, e);
+            log.warn("Async executor saturated for single-mode HDFS generation: correlationId={} reportId={} templateId={}",
+                    correlationId, reportId, request != null ? request.getTemplateId() : null, e);
             return ResponseEntity.status(503).body(Map.of(
                     "status", "ERROR",
                     "message", "Report generation queue is full. Please retry shortly.",

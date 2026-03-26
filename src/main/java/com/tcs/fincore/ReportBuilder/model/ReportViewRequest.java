@@ -9,6 +9,7 @@ import java.util.Map;
  */
 @Data
 public class ReportViewRequest {
+    private String reportId;             // REPORT_ID in RB_REPORT_TEMPLATE
     private String templateId;           // TEMPLATE_ID in RB_REPORT_TEMPLATE
     private String variantCode;          // WHOLE_BANK, BRANCH_WISE, etc.
     private Map<String, Object> params;  // paramName -> value (branchCode, reportDate, etc.)
