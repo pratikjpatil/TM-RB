@@ -4,6 +4,7 @@ import com.tcs.fincore.ReportBuilder.exception.ValidationException;
 import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.runtime.JexlEngineFactory;
 import com.tcs.fincore.ReportBuilder.util.GraphUtils;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.jexl3.*;
 import org.springframework.stereotype.Service;
@@ -246,15 +247,12 @@ public class CalculationService {
     private class LazyCalculationContext implements JexlContext {
         private final Map<String, Object> computed;
         private final Map<String, Object> dbResults;
+        @Setter
         private ReportTemplate.Cell currentCell;
 
         public LazyCalculationContext(Map<String, Object> computed, Map<String, Object> dbResults) {
             this.computed = computed;
             this.dbResults = dbResults;
-        }
-
-        public void setCurrentCell(ReportTemplate.Cell cell) {
-            this.currentCell = cell;
         }
 
         @Override

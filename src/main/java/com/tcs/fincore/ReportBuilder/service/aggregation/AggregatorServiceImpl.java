@@ -179,9 +179,7 @@ public class AggregatorServiceImpl implements AggregatorService {
             Thread.currentThread().interrupt();
             log.error("Batch execution interrupted", e);
             futures.forEach(f -> f.cancel(true));
-        } catch (ExecutionException e) {
-            log.error("Batch execution failed", e);
-        } catch (RuntimeException e) {
+        } catch (ExecutionException | RuntimeException e) {
             log.error("Batch execution failed", e);
         }
 

@@ -244,7 +244,7 @@ public class QueryPatternAnalyzer {
 
 
     // -------------------------------------------------------------------------
-    // FIX #12: Iterate the UNION of filter keys from ALL specs, not just spec[0].
+    // Iterate the UNION of filter keys from ALL specs, not just spec[0].
     //          If spec[0] has null filters, we no longer return early and miss data.
     // -------------------------------------------------------------------------
 

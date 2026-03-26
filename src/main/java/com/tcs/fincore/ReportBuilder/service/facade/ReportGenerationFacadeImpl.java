@@ -14,6 +14,7 @@ import com.tcs.fincore.ReportBuilder.service.export.ReportExporter;
 import com.tcs.fincore.ReportBuilder.service.metadata.ReportMetadataService;
 import com.tcs.fincore.ReportBuilder.service.pipeline.ReportExecutionService;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
+import com.tcs.fincore.ReportBuilder.service.storage.ReportExecutionDateResolver;
 import com.tcs.fincore.ReportBuilder.service.storage.ReportStoragePathService;
 import com.tcs.fincore.ReportBuilder.service.facade.dto.ReportFileResponse;
 import com.tcs.fincore.ReportBuilder.util.FileStorageUtil;
@@ -45,6 +46,7 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
     private final FileSystem hdfsFileSystem;
     private final ReportEventPublisher eventPublisher;
     private final ReportStoragePathService storagePathService;
+    private final ReportExecutionDateResolver reportExecutionDateResolver;
 
     @Value("${report.batch.hdfs-base-path:/reports}")
     private String defaultHdfsBasePath;
@@ -119,8 +121,9 @@ public class ReportGenerationFacadeImpl implements ReportGenerationFacade {
             ExportModel model = executionService.generateModelOnly(reportCtx.template());
 
             // 3. Resolve HDFS directory: basePath/date/reportId/
+            LocalDate storageDate = reportExecutionDateResolver.resolveStorageDate(request.getParams(), reportCtx.variant());
             String reportId  = reportCtx.template().getReportMeta().getReportId();
-            Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, LocalDate.now(), reportId);
+            Path   directory = resolveHdfsDirectory(defaultHdfsBasePath, storageDate, reportId);
 
             // 4. Build file name (without extension — added per-format)
             String fileName = ReportFileNameUtil.buildFileName(

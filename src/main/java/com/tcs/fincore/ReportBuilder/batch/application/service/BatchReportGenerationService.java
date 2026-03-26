@@ -11,12 +11,15 @@ import com.tcs.fincore.ReportBuilder.service.aggregation.AggregatorService;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import com.tcs.fincore.ReportBuilder.service.calculation.CalculationService;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
+import com.tcs.fincore.ReportBuilder.service.storage.ReportExecutionDateResolver;
 import com.tcs.fincore.ReportBuilder.service.template.TemplateProcessorService;
 import com.tcs.fincore.ReportBuilder.batch.application.util.TemplateCloner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cglib.core.Local;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,6 +43,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
     private final CalculationService calculationService;
     private final TemplateCloner templateCloner;
     private final BatchReportStorageService reportStorageService;
+    private final ReportExecutionDateResolver reportExecutionDateResolver;
 
     public void generateReportsInBatches(BatchJobRequest request,
                                          BatchAnalysisResult analysis,
@@ -52,6 +56,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
                                          Consumer<Integer> onProgress,
                                          BiConsumer<String, Exception> onError,
                                          Runnable onPartialCompletion) {
+        LocalDate storageDate = reportExecutionDateResolver.resolveStorageDate(request.getCommonParams(), analysis.variant());
         List<String> allValues = request.getVaryingDimension().getValues();
         int totalReports = allValues.size();
         status.getProgress().setTotalReports(totalReports);
@@ -59,6 +64,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
         List<List<String>> batches = splitIntoBatches(allValues, request.getBatchSize());
         log.info("Phase 3: Generating {} reports in {} batches", totalReports, batches.size());
+        log.info("Reports will be stored under date : {}", storageDate);
 
         AtomicInteger completedCount = new AtomicInteger(0);
 
@@ -77,7 +83,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
-                        generateSingleReport(request, analysis, dimensionValue);
+                        generateSingleReport(request, analysis, dimensionValue, storageDate);
                         int done;
                         synchronized (status.getProgress()) {
                             status.getProgress().getCompletedValues().add(dimensionValue);
@@ -121,7 +127,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
     private void generateSingleReport(BatchJobRequest request,
                                       BatchAnalysisResult analysis,
-                                      String dimensionValue) throws Exception {
+                                      String dimensionValue, LocalDate storageDate) throws Exception {
         Map<String, Object> runInputs = new HashMap<>(analysis.staticContext());
         runInputs.put(request.getVaryingDimension().getParamName(), dimensionValue);
 
@@ -158,6 +164,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
         reportStorageService.saveReports(
                 request.getHdfsBasePath(),
+                storageDate,
                 request.getCommonParams(),
                 request.getVaryingDimension().getParamName(),
                 dimensionValue,

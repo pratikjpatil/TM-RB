@@ -7,7 +7,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -38,35 +37,35 @@ public class AsyncConfig {
      * synchronous).
      */
     @Bean(name = "reportExecutor")
-    public Executor reportExecutor() {
+    public ThreadPoolTaskExecutor reportExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        
+
         // Core threads always alive
         executor.setCorePoolSize(corePoolSize);
-        
+
         // Max threads for peak load
         executor.setMaxPoolSize(maxPoolSize);
-        
+
         // Queue capacity for backpressure
         executor.setQueueCapacity(queueCapacity);
-        
+
         // Thread naming for debugging
         executor.setThreadNamePrefix(threadNamePrefix);
-        
+
         // Fail fast when saturated instead of running on the caller thread.
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
-        
+
         // Graceful shutdown
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
-        
+
         executor.initialize();
-        
-        log.info("Initialized async report executor: core={}, max={}, queue={}", 
-            executor.getCorePoolSize(), 
-            executor.getMaxPoolSize(),
-            executor.getQueueCapacity());
-        
+
+        log.info("Initialized async report executor: core={}, max={}, queue={}",
+                executor.getCorePoolSize(),
+                executor.getMaxPoolSize(),
+                executor.getQueueCapacity());
+
         return executor;
     }
 
@@ -75,7 +74,7 @@ public class AsyncConfig {
      * Isolates single-mode async workloads from batch workloads.
      */
     @Bean(name = "batchReportGenerationExecutor")
-    public Executor batchReportGenerationExecutor() {
+    public ThreadPoolTaskExecutor batchReportGenerationExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(10);
         executor.setMaxPoolSize(60);

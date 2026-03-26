@@ -1,7 +1,3 @@
-
-
-
-
 package com.tcs.fincore.ReportBuilder.controller;
 
 import com.tcs.fincore.ReportBuilder.batch.orchestrator.BatchJobOrchestrator;
@@ -162,7 +158,7 @@ public class BatchReportController {
                 }
             }
 
-            // SECURITY FIX: Cap the number of branch codes to prevent DoS
+            // Cap the number of branch codes to prevent DoS
             if (branchCodes.size() > 50_000) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "status", "ERROR",

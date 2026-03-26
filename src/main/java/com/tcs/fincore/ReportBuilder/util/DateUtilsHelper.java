@@ -1,11 +1,18 @@
 package com.tcs.fincore.ReportBuilder.util;
 
 import lombok.extern.slf4j.Slf4j;
+
+import java.sql.Date;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 
 /**
  * PRODUCTION-GRADE: Helper class for JEXL expressions to perform date math.
@@ -13,6 +20,13 @@ import java.time.temporal.ChronoUnit;
  */
 @Slf4j
 public class DateUtilsHelper {
+
+    private static final List<DateTimeFormatter> STRING_DATE_FORMATTERS = List.of(
+            DateTimeFormatter.ISO_LOCAL_DATE,
+            DateTimeFormatter.ofPattern("dd-MM-yyyy"),
+            DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)
+    );
 
     /**
      * Adds years to a date object (String or LocalDate).
@@ -98,5 +112,34 @@ public class DateUtilsHelper {
             }
         }
         return null;
+    }
+
+    public static Optional<LocalDate> toLocalDate(Object value) {
+        if (value == null) {
+            return Optional.empty();
+        }
+        if (value instanceof LocalDate localDate) {
+            return Optional.of(localDate);
+        }
+        if (value instanceof Date sqlDate) {
+            return Optional.of(sqlDate.toLocalDate());
+        }
+        if (value instanceof java.util.Date utilDate) {
+            return Optional.of(Instant.ofEpochMilli(utilDate.getTime()).atZone(ZoneId.systemDefault()).toLocalDate());
+        }
+        if (value instanceof CharSequence sequence) {
+            String raw = sequence.toString().trim();
+            if (raw.isEmpty()) {
+                return Optional.empty();
+            }
+            for (DateTimeFormatter formatter : STRING_DATE_FORMATTERS) {
+                try {
+                    return Optional.of(LocalDate.parse(raw, formatter));
+                } catch (DateTimeParseException ignored) {
+                    // try next formatter
+                }
+            }
+        }
+        return Optional.empty();
     }
 }

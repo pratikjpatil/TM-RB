@@ -1,7 +1,3 @@
-
-
-
-
 // MODIFIED: Added executionContext field to carry trigger source and correlation IDs.
 // All existing fields and their behaviour are unchanged.
 

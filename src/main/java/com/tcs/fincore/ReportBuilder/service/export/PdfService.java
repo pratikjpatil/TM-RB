@@ -55,23 +55,25 @@ public class PdfService implements ReportExporter {
                 String resourceName = path.substring("classpath:".length());
                 java.net.URL url = getClass().getClassLoader().getResource(resourceName);
                 if (url == null) {
-                    log.error("Logo resource not found: {}", resourceName);
+                    log.error("Logo resource not found on classpath: '{}'. "
+                            + "Add the file to src/main/resources/{} or override "
+                            + "report.logo.path in application properties. "
+                            + "PDFs will be generated without the logo.", resourceName, resourceName);
                     return null;
                 }
                 img = Image.getInstance(url);
             } else {
-                // Fallback for external files
+                // External file-system path (e.g. file:/opt/assets/logo.png)
                 img = Image.getInstance(path);
             }
-            // Scale it once globally
             img.scaleAbsolute(50f, 17f);
             log.info("Logo loaded successfully from: {}", path);
             return img;
-        } catch (RuntimeException e) {
-            log.error("Failed to load logo from {}: {}", path, e.getMessage());
+        } catch (IOException | RuntimeException e) {
+            // Non-fatal: application continues, PDFs render without the logo.
+            log.error("Failed to load logo from '{}': {}. PDFs will be generated without the logo.",
+                    path, e.getMessage(), e);
             return null;
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
     }
 

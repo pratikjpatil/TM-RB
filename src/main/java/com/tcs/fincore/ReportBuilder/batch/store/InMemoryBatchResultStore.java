@@ -65,4 +65,3 @@ public class InMemoryBatchResultStore implements BatchResultStore {
         availablePatterns.remove(jobId);
     }
 }
-

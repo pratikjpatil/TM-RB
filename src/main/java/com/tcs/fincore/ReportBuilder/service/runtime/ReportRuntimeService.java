@@ -76,7 +76,7 @@ public class ReportRuntimeService {
 //                    log.debug("Injected safety placeholder '0' for skipped global '{}'", def.getName());
 
                     //  If we have pre-fetched values, inject the whole COLLECTION.
-                    // This forces QueryPatternAnalyzer to create an IN clause (Bulk Filter).
+                    //  This forces QueryPatternAnalyzer to create an IN clause (Bulk Filter).
                     if (preFetchedGlobals != null && preFetchedGlobals.containsKey(def.getName())) {
                         Collection<Object> distinctValues = new HashSet<>(preFetchedGlobals.get(def.getName()).values());
                         batchContext.put(def.getName(), new ArrayList<>(distinctValues));
@@ -199,7 +199,7 @@ public class ReportRuntimeService {
 //                        Object resolvedExpr = globalParamResolver.resolveValue(cell.getExpression(), context);
 //                        cell.setExpression(String.valueOf(resolvedExpr));
 //                    }
-                    // 2. FIXED: Safe Interpolation for Formulas
+                    // 2. Safe Interpolation for Formulas
                     if (cell.getExpression() != null && cell.getExpression().contains("$G{")) {
                         // Use custom interpolation that adds quotes to Strings
                         String newExpr = interpolateFormulaSafe(cell.getExpression(), context);

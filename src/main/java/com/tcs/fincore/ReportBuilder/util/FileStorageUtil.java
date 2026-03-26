@@ -22,7 +22,6 @@ public class FileStorageUtil {
 
 
     // ============================================================
-// FILE: FileStorageUtil.java  — FIX #13
 // PATH_LOCKS cleaned up after each use to prevent unbounded
 // memory growth across tens of thousands of HDFS writes.
 // ============================================================
@@ -36,7 +35,7 @@ public class FileStorageUtil {
             throw new IllegalArgumentException("FilePath cannot be null");
 
         String pathKey = filePath.toString();
-        // FIX #13: computeIfAbsent creates the lock; we remove it after use.
+        //  computeIfAbsent creates the lock; we remove it after use.
         ReentrantLock lock = (ReentrantLock) PATH_LOCKS.computeIfAbsent(
                 pathKey, k -> new ReentrantLock());
 
@@ -46,7 +45,7 @@ public class FileStorageUtil {
             log.debug("Successfully wrote {} bytes to HDFS: {}", data.length, filePath);
         } finally {
             lock.unlock();
-            // FIX #13: Remove the lock only if no other thread is waiting on it.
+            // Remove the lock only if no other thread is waiting on it.
             // ReentrantLock.hasQueuedThreads() is safe here because we still hold
             // the lock key in the map; a concurrent writer will re-create it if needed.
             if (!lock.hasQueuedThreads()) {

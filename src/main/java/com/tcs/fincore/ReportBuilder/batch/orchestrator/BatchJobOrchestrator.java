@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -48,7 +49,7 @@ public class BatchJobOrchestrator {
     private final ResultDistributor resultDistributor;
     private final ReportEventPublisher eventPublisher;
     @Qualifier("batchReportGenerationExecutor")
-    private final Executor reportGenerationExecutor;
+    private final ThreadPoolTaskExecutor reportGenerationExecutor;
 
     @Lazy
     @Autowired
@@ -429,10 +430,11 @@ public class BatchJobOrchestrator {
         log.info("=======================");
     }
 
-    private ExecutorService toExecutorService(Executor executor) {
-        if (executor instanceof ExecutorService executorService) {
-            return executorService;
-        }
-        throw new IllegalStateException("batchReportGenerationExecutor must be an ExecutorService implementation");
+    private ExecutorService toExecutorService(ThreadPoolTaskExecutor taskExecutor) {
+        // ThreadPoolTaskExecutor implements Executor/AsyncTaskExecutor but NOT ExecutorService.
+        // getThreadPoolExecutor() returns the underlying java.util.concurrent.ThreadPoolExecutor,
+        // which is a full ExecutorService and is what BatchReportGenerationService needs for
+        // CompletableFuture / Future tracking.
+        return taskExecutor.getThreadPoolExecutor();
     }
 }
