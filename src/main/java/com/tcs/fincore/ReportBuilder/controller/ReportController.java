@@ -32,7 +32,7 @@ public class ReportController {
      */
     @PostMapping(value = "/view/{format}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> viewReport(
-            @PathVariable String format, 
+            @PathVariable String format,
             @RequestBody ReportViewRequest request) {
         String correlationId = UUID.randomUUID().toString();
         String reportId = request != null ? request.getReportId() : null;
@@ -52,7 +52,7 @@ public class ReportController {
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(response.getContent());
-                    
+
         } catch (ValidationException e) {
             log.warn("Validation failure in view report: correlationId={} jobId={} reportId={} templateId={}",
                     correlationId, "N/A", reportId, request != null ? request.getTemplateId() : null, e);
@@ -137,9 +137,9 @@ public class ReportController {
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of(
-            "status", "UP",
-            "service", "ReportBuilder",
-            "version", "1.1"
+                "status", "UP",
+                "service", "ReportBuilder",
+                "version", "1.1"
         ));
     }
 }

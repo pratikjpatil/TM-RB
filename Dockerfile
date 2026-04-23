@@ -15,4 +15,4 @@ COPY ${JAR_FILE} app.jar
 EXPOSE 8091
 
 # Run your Spring Boot app
-CMD ["java", "-jar", "app.jar"]
+CMD ["java", "-Duser.timezone=Asia/kolkata","-jar", "app.jar"]

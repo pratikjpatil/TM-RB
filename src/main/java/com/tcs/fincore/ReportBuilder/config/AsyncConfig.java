@@ -10,7 +10,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
- *  NEW: Async configuration for non-blocking HDFS operations
+ *  Async configuration for non-blocking HDFS operations
  */
 @Configuration
 @EnableAsync

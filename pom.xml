@@ -173,10 +173,15 @@
             <version>2.1.0</version>
         </dependency>
 
-        <!-- NEW: Micrometer for Prometheus metrics -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
         </dependency>
 
 	</dependencies>

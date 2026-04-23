@@ -41,6 +41,6 @@ public class ExportModel {
     @AllArgsConstructor
     public static class Row {
         private String rowType;
-        private java.util.List<Object> cells;
+        private List<Object> cells;
     }
 }

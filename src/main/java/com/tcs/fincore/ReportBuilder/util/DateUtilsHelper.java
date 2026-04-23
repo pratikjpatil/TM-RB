@@ -25,7 +25,8 @@ public class DateUtilsHelper {
             DateTimeFormatter.ISO_LOCAL_DATE,
             DateTimeFormatter.ofPattern("dd-MM-yyyy"),
             DateTimeFormatter.ofPattern("dd/MM/yyyy"),
-            DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)
+            DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSS][.SS][.S]")
     );
 
     /**
@@ -115,6 +116,7 @@ public class DateUtilsHelper {
     }
 
     public static Optional<LocalDate> toLocalDate(Object value) {
+        //log.debug("date to be parsed to local date :: {}", value);
         if (value == null) {
             return Optional.empty();
         }
@@ -139,6 +141,7 @@ public class DateUtilsHelper {
                     // try next formatter
                 }
             }
+
         }
         return Optional.empty();
     }

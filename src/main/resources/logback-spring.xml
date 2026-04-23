@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- 1. CONSOLE APPENDER (Text for Humans) -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>
+                %d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%blue(%t)] %yellow(%C{1}): %msg %n%throwable
+            </pattern>
+        </encoder>
+    </appender>
+
+    <!-- 2. JSON CONSOLE APPENDER (For Machines/ETL - stdout for Fluent-Bit) -->
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <timeZone>Asia/Kolkata</timeZone>
+                </timestamp>
+                <pattern>
+                    <pattern>
+                        {
+                        "level": "%level",
+                        "service": "${spring.application.name:-ReportBuilderService}",
+                        "traceId": "%mdc{traceId}",
+                        "userId": "%mdc{userId}",
+                        "clientIp": "%mdc{clientIp}",
+                        "apiPath": "%mdc{apiPath}",
+                        "class": "%logger{40}",
+                        "message": "%message",
+                        "stack_trace": "%exception{10}"
+                        }
+                    </pattern>
+                </pattern>
+            </providers>
+        </encoder>
+    </appender>
+
+    <!-- 3. ROOT LOGGER -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+        <appender-ref ref="JSON_CONSOLE" />
+    </root>
+
+</configuration>
