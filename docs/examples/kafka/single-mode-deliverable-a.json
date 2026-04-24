@@ -1,0 +1,8 @@
+{
+  "reportId": "RPT_CIRCLE_AGG",
+  "templateId": "TM_CIRCLE_AGG_V1",
+  "variantCode": "CIRCLE_WISE",
+  "params": {
+    "circleCode": "C001"
+  }
+}

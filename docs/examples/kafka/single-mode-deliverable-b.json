@@ -1,0 +1,9 @@
+{
+  "reportId": "RPT_CIRCLE_BRANCH_DETAIL",
+  "templateId": "TM_CIRCLE_BRANCH_DETAIL_V1",
+  "variantCode": "CIRCLE_BRANCH_DETAIL",
+  "params": {
+    "circleCode": "C001",
+    "balanceDate": "2026-03-31"
+  }
+}

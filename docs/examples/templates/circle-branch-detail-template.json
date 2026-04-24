@@ -1,0 +1,140 @@
+{
+  "template": {
+    "templateMeta": {
+      "templateId": "TM_CIRCLE_BRANCH_DETAIL_V1",
+      "version": "1.0",
+      "description": "Circle/Branch/Currency tabular detail report",
+      "pageSize": "A4",
+      "pageOrientation": "LANDSCAPE"
+    },
+    "reportMeta": {
+      "reportName": "Circle Branch Balance Detail",
+      "reportId": "RPT_CIRCLE_BRANCH_DETAIL",
+      "extras": [
+        { "key": "circleCode", "label": "Circle", "value": "$G{circleCode}" },
+        { "key": "balanceDate", "label": "Balance Date", "value": "$G{balanceDate}" }
+      ]
+    },
+    "globalParams": [
+      {
+        "name": "circleCode",
+        "dataType": "STRING",
+        "label": "Circle Code",
+        "mode": "INPUT",
+        "required": true
+      },
+      {
+        "name": "balanceDate",
+        "dataType": "DATE",
+        "label": "Balance Date",
+        "mode": "INPUT",
+        "required": true
+      },
+      {
+        "name": "circleLabel",
+        "dataType": "STRING",
+        "label": "Circle Label",
+        "mode": "EXPRESSION",
+        "expression": "#{ G.circleCode != null ? 'Circle: ' + G.circleCode : 'All Circles' }"
+      }
+    ],
+    "reportData": {
+      "columns": [
+        { "id": "CGL", "name": "CGL" },
+        { "id": "DESCRIPTION", "name": "CGL Description" },
+        { "id": "BALANCE", "name": "Balance" },
+        { "id": "BRANCH_CODE", "name": "Branch Code" },
+        { "id": "BRANCH_NAME", "name": "Branch Name" },
+        { "id": "CURRENCY", "name": "Currency" }
+      ],
+      "rows": [
+        {
+          "id": "ROW_DYNAMIC_1",
+          "rowType": "DYNAMIC",
+          "dynamicConfig": {
+            "type": "DB_LIST",
+            "table": "GL_BALANCE",
+            "alias": "g",
+            "joins": [
+              {
+                "type": "INNER",
+                "table": "BRANCH_MASTER",
+                "alias": "b",
+                "on": {
+                  "leftAlias": "g",
+                  "leftColumn": "BRANCH_CODE",
+                  "rightAlias": "b",
+                  "rightColumn": "BRANCH_CODE"
+                }
+              },
+              {
+                "type": "INNER",
+                "table": "CGL_MASTER",
+                "alias": "m",
+                "on": {
+                  "leftAlias": "g",
+                  "leftColumn": "CGL",
+                  "rightAlias": "m",
+                  "rightColumn": "CGL"
+                }
+              }
+            ],
+            "select": [
+              "g.CGL",
+              "m.DESCRIPTION",
+              "g.BALANCE",
+              "g.BRANCH_CODE",
+              "b.BRANCH_NAME",
+              "g.CURRENCY"
+            ],
+            "filters": {
+              "b.BRANCH_TYPE": [
+                { "op": "=", "value": "M", "dataType": "STRING", "static": true }
+              ]
+            },
+            "orderby": "g.CGL ASC, g.BRANCH_CODE ASC",
+            "limit": 5000
+          }
+        }
+      ]
+    }
+  },
+  "variants": [
+    {
+      "variantCode": "CIRCLE_BRANCH_DETAIL",
+      "variantName": "Circle Branch Detail",
+      "variantParams": [
+        {
+          "paramName": "circleCode",
+          "label": "Circle Code",
+          "paramType": "STRING",
+          "required": true,
+          "multiValued": false,
+          "uiHint": "textbox"
+        },
+        {
+          "paramName": "balanceDate",
+          "label": "Balance Date",
+          "paramType": "DATE",
+          "required": true,
+          "multiValued": false,
+          "uiHint": "datepicker"
+        }
+      ],
+      "filterRules": [
+        {
+          "scopeType": "ALL_DB",
+          "paramName": "circleCode",
+          "dbColumn": "b.CIRCLE_CODE",
+          "operator": "="
+        },
+        {
+          "scopeType": "ALL_DB",
+          "paramName": "balanceDate",
+          "dbColumn": "g.BALANCE_DATE",
+          "operator": "="
+        }
+      ]
+    }
+  ]
+}

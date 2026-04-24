@@ -129,9 +129,11 @@ public class GlobalParamEngine {
 
         DataSourceSpec spec = new DataSourceSpec(
                 "GLOBAL::" + def.getName(),
-                Type.valueOf(def.getSource().getType()),
+                Type.valueOf(def.getSource().getType().toUpperCase(Locale.ROOT)),
                 def.getSource().getTable(),
+                def.getSource().getAlias(),
                 def.getSource().getColumn(),
+                toJoinSpecs(def.getSource().getJoins()),
                 resolvedFilters,
                 "GlobalParam"
         );
@@ -201,5 +203,24 @@ public class GlobalParamEngine {
             for (Object v : ((List<?>)obj) ) if (containsUnresolvedRefs(v)) return true;
         }
         return false;
+    }
+
+    private List<DataSourceSpec.JoinSpec> toJoinSpecs(List<ReportTemplate.JoinDef> joins) {
+        if (joins == null || joins.isEmpty()) {
+            return List.of();
+        }
+        return joins.stream()
+                .map(j -> new DataSourceSpec.JoinSpec(
+                        DataSourceSpec.JoinSpec.JoinType.valueOf(j.getType().toUpperCase(Locale.ROOT)),
+                        j.getTable(),
+                        j.getAlias(),
+                        j.getOn() == null ? null : new DataSourceSpec.JoinOnSpec(
+                                j.getOn().getLeftAlias(),
+                                j.getOn().getLeftColumn(),
+                                j.getOn().getRightAlias(),
+                                j.getOn().getRightColumn()
+                        )
+                ))
+                .collect(Collectors.toList());
     }
 }

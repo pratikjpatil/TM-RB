@@ -1,0 +1,17 @@
+{
+  "jobId": "JOB_CIRCLE_DETAIL_20260424",
+  "reportId": "RPT_CIRCLE_BRANCH_DETAIL",
+  "templateId": "TM_CIRCLE_BRANCH_DETAIL_V1",
+  "variantCode": "CIRCLE_BRANCH_DETAIL",
+  "commonParams": {
+    "balanceDate": "2026-03-31"
+  },
+  "varyingDimension": {
+    "paramName": "circleCode",
+    "values": ["C001", "C002", "C003", "C004"]
+  },
+  "executionMode": "PARALLEL",
+  "batchSize": 200,
+  "parallelThreads": 8,
+  "outputFormats": ["xlsx"]
+}
