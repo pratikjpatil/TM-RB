@@ -1,0 +1,5 @@
+include:
+  - project: 'cb-ops/devops/cb-ops-blueprint1.0/fincore/fincore-devops'
+    file:
+      - 'Backend/backend.yml'
+    ref: 'dev'
