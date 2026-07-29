@@ -22,7 +22,7 @@ jobs:
       uses: actions/checkout@v4
 
     # 1. Setup Java Environment (Match your Spring Boot version, e.g., 17 or 21)
-    - name: Set up JDK 17
+    - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
         java-version: '21'
@@ -39,7 +39,7 @@ jobs:
 
     # 3. Explicitly compile the Spring Boot app so CodeQL maps the bytecode
     - name: Build with Maven
-      run: ./mvnw clean package -DskipTests
+      run: mvn clean package -DskipTests
 
     # 4. Execute SAST scan and publish results to GitHub Security tab
     - name: Perform CodeQL Analysis
