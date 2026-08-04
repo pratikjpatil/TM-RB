@@ -7,12 +7,15 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 @Configuration
 public class JacksonConfig {
 
     /**
      * Primary application ObjectMapper — injected everywhere by default.
+     * Starts from Spring Boot's Jackson builder so framework-discovered modules
+     * and message-converter defaults remain intact after dependency upgrades.
      * - FAIL_ON_UNKNOWN_PROPERTIES disabled: tolerates DB/API schema evolution
      *   without breaking deserialization (unknown fields are silently ignored).
      * - JavaTimeModule: handles LocalDate, LocalDateTime, Instant natively.
@@ -20,11 +23,12 @@ public class JacksonConfig {
      */
     @Bean
     @Primary
-    public ObjectMapper objectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        return mapper;
+    public ObjectMapper objectMapper(Jackson2ObjectMapperBuilder builder) {
+        return builder
+                .modulesToInstall(new JavaTimeModule())
+                .featuresToDisable(
+                        SerializationFeature.WRITE_DATES_AS_TIMESTAMPS,
+                        DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .build();
     }
 }

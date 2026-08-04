@@ -57,6 +57,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Jackson modules explicitly required by application ObjectMapper beans. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
         <!-- Messaging & Kafka -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
