@@ -31,6 +31,10 @@ public class ParamTypeConverter {
         // Default to STRING if type is unspecified
         String type = targetType == null ? "STRING" : targetType.toUpperCase(Locale.ROOT);
 
+        if (rawValue instanceof List<?> && ("LIST".equals(type) || "STRING".equals(type))) {
+            return rawValue;
+        }
+
         try {
             return switch (type) {
                 case "STRING" -> String.valueOf(rawValue);

@@ -1,0 +1,125 @@
+{
+  "template": {
+    "templateMeta": {
+      "templateId": "TM_CIRCLE_AGG_V1",
+      "version": "1.0",
+      "description": "Circle-wise aggregated CGL summary",
+      "pageSize": "A4",
+      "pageOrientation": "PORTRAIT"
+    },
+    "reportMeta": {
+      "reportName": "Circle-wise Aggregated Balance Report",
+      "reportId": "RPT_CIRCLE_AGG",
+      "extras": [
+        { "key": "circleCode", "label": "Circle", "value": "$G{circleCode}" },
+        { "key": "circleLabel", "label": "Circle Label", "value": "$G{circleLabel}" }
+      ]
+    },
+    "globalParams": [
+      {
+        "name": "circleCode",
+        "dataType": "STRING",
+        "label": "Circle Code",
+        "mode": "INPUT",
+        "required": true
+      },
+      {
+        "name": "circleBranchCodes",
+        "dataType": "LIST",
+        "label": "Circle Branch Codes",
+        "mode": "QUERY",
+        "source": {
+          "type": "QUERY_LIST",
+          "table": "BRANCH_MASTER",
+          "column": "BRANCH_CODE",
+          "filters": {
+            "CIRCLE_CODE": [{ "op": "=", "value": "$G{circleCode}", "dataType": "STRING", "static": true }]
+          }
+        }
+      },
+      {
+        "name": "circleLabel",
+        "dataType": "STRING",
+        "label": "Circle Label",
+        "mode": "EXPRESSION",
+        "expression": "#{ G.circleCode != null ? 'Circle: ' + G.circleCode : 'All Circles' }"
+      }
+    ],
+    "reportData": {
+      "columns": [
+        { "id": "HEAD", "name": "Head" },
+        { "id": "AMOUNT", "name": "Amount" }
+      ],
+      "rows": [
+        {
+          "id": "R1",
+          "rowType": "DATA",
+          "cells": [
+            { "id": "c_r1_h", "type": "TEXT", "value": "Cash in Hand (CGL 1001)" },
+            {
+              "id": "c_r1_amt",
+              "type": "FORMULA",
+              "expression": "#{ cashBal }",
+              "variables": {
+                "cashBal": {
+                  "type": "DB_SUM",
+                  "table": "GL_BALANCE",
+                  "column": "BALANCE",
+                  "filters": {
+                    "CGL": [{ "op": "=", "value": "1001", "dataType": "STRING", "static": true }]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "R2",
+          "rowType": "DATA",
+          "cells": [
+            { "id": "c_r2_h", "type": "TEXT", "value": "Loans & Advances (CGL 2001)" },
+            {
+              "id": "c_r2_amt",
+              "type": "FORMULA",
+              "expression": "#{ loanBal }",
+              "variables": {
+                "loanBal": {
+                  "type": "DB_SUM",
+                  "table": "GL_BALANCE",
+                  "column": "BALANCE",
+                  "filters": {
+                    "CGL": [{ "op": "=", "value": "2001", "dataType": "STRING", "static": true }]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "variants": [
+    {
+      "variantCode": "CIRCLE_WISE",
+      "variantName": "Circle-wise",
+      "variantParams": [
+        {
+          "paramName": "circleCode",
+          "label": "Circle Code",
+          "paramType": "STRING",
+          "required": true,
+          "multiValued": false,
+          "uiHint": "textbox"
+        }
+      ],
+      "filterRules": [
+        {
+          "scopeType": "ALL_DB",
+          "paramName": "circleBranchCodes",
+          "dbColumn": "BRANCH_CODE",
+          "operator": "IN"
+        }
+      ]
+    }
+  ]
+}

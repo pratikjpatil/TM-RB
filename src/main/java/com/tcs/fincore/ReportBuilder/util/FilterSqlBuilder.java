@@ -45,6 +45,22 @@ public class FilterSqlBuilder {
         }
     }
 
+    public static void validateColumnReference(String reference) {
+        if (reference == null || reference.isBlank()) {
+            throw new ValidationException("Column reference cannot be null or blank");
+        }
+        if (reference.contains(".")) {
+            String[] parts = reference.split("\\.");
+            if (parts.length != 2) {
+                throw new ValidationException("Invalid qualified column reference: " + reference);
+            }
+            validateIdentifier(parts[0]);
+            validateIdentifier(parts[1]);
+            return;
+        }
+        validateIdentifier(reference);
+    }
+
     /**
      * Converts raw values to proper database types for optimal performance
      * <p>

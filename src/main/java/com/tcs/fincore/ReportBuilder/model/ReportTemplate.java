@@ -68,9 +68,27 @@ public class ReportTemplate {
     public static class ParamDataSource {
         private String type;           // DB_VALUE, DB_SUM, etc.
         private String table;
+        private String alias;
         private String column;
+        private List<JoinDef> joins;
         // Filters: Map<ColumnName, List<Condition>>
         private Map<String, Object> filters;
+    }
+
+    @Data
+    public static class JoinDef {
+        private String type;
+        private String table;
+        private String alias;
+        private JoinOnDef on;
+    }
+
+    @Data
+    public static class JoinOnDef {
+        private String leftAlias;
+        private String leftColumn;
+        private String rightAlias;
+        private String rightColumn;
     }
 
     @Data

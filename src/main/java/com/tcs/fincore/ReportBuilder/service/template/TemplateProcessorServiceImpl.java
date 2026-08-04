@@ -10,12 +10,14 @@ import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec.Type;
 import com.tcs.fincore.ReportBuilder.util.FilterSqlBuilder;
 import com.tcs.fincore.ReportBuilder.util.GlobalParamResolver;
+import com.tcs.fincore.ReportBuilder.util.JoinSqlBuilder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -130,6 +132,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                         }
 
                         String table = (String) src.get("table");
+                        String alias = (String) src.get("alias");
                         String column = (String) src.get("column");
 
                         if (table == null || table.isBlank()) {
@@ -146,7 +149,9 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                                 cell.getId(),
                                 Type.valueOf(type),
                                 table,
+                                alias,
                                 column,
+                                toJoinSpecs(safeList(src.get("joins"))),
                                 safeMap(src.get("filters")),
                                 "cell:" + cell.getId()
                         ));
@@ -167,6 +172,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
 
                                 if (vType.startsWith("DB_")) {
                                     String table = (String) map.get("table");
+                                    String alias = (String) map.get("alias");
                                     String column = (String) map.get("column");
 
                                     if (table == null || table.isBlank()) {
@@ -185,7 +191,9 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                                             cell.getId() + "::var::" + var.getKey(),
                                             Type.valueOf(vType),
                                             table,
+                                            alias,
                                             column,
+                                            toJoinSpecs(safeList(map.get("joins"))),
                                             safeMap(map.get("filters")),
                                             "inline:" + var.getKey()
                                     ));
@@ -231,6 +239,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
             }
 
             String table = (String) cfg.get("table");
+            String alias = (String) cfg.get("alias");
 
             @SuppressWarnings("unchecked")
             List<String> selectFields = (List<String>) cfg.get("select");
@@ -244,6 +253,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
             }
 
             Map<String, Object> filters = safeMap(cfg.get("filters"));
+            List<DataSourceSpec.JoinSpec> joins = toJoinSpecs(safeList(cfg.get("joins")));
             String orderBy = cfg.containsKey("orderby") ? (String) cfg.get("orderby") : null;
             int limit = cfg.containsKey("limit") ? ((Number) cfg.get("limit")).intValue() : 300;
 
@@ -253,7 +263,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
             }
 
             try {
-                List<Map<String, Object>> dbRows = fetchDynamic(table, selectFields, filters, orderBy, limit);
+                List<Map<String, Object>> dbRows = fetchDynamic(table, alias, joins, selectFields, filters, orderBy, limit);
 
                 int rowCount = 1;
                 for (Map<String, Object> dbRow : dbRows) {
@@ -292,17 +302,26 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
 
     private List<Map<String, Object>> fetchDynamic(
             String table,
+            String alias,
+            List<DataSourceSpec.JoinSpec> joins,
             List<String> fields,
             Map<String, Object> filters,
             String orderBy,
             int limit) {
 
-        FilterSqlBuilder.validateIdentifier(table);
-        fields.forEach(FilterSqlBuilder::validateIdentifier);
+        fields.forEach(FilterSqlBuilder::validateColumnReference);
 
         StringBuilder sql = new StringBuilder("SELECT ");
-        sql.append(String.join(",", fields));
-        sql.append(" FROM ").append(table);
+        List<String> projectedAliases = new ArrayList<>();
+        for (int i = 0; i < fields.size(); i++) {
+            String projectedAlias = "f_" + i;
+            projectedAliases.add(projectedAlias);
+            sql.append(fields.get(i)).append(" AS ").append(projectedAlias);
+            if (i < fields.size() - 1) {
+                sql.append(",");
+            }
+        }
+        sql.append(JoinSqlBuilder.buildFromClause(table, alias, joins));
         sql.append(" WHERE 1=1");
 
         Map<String, Object> params = new HashMap<>();
@@ -319,7 +338,19 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
         log.debug("Executing dynamic row SQL: {}", sql);
 
         try {
-            return jdbc.queryForList(sql.toString(), params);
+            List<Map<String, Object>> result = jdbc.queryForList(sql.toString(), params);
+            return result.stream().map(row -> {
+                Map<String, Object> normalized = new LinkedHashMap<>();
+                for (int i = 0; i < fields.size(); i++) {
+                    String projection = projectedAliases.get(i);
+                    Object val = row.get(projection);
+                    if (val == null) {
+                        val = row.get(projection.toUpperCase(Locale.ROOT));
+                    }
+                    normalized.put(fields.get(i), val);
+                }
+                return normalized;
+            }).collect(Collectors.toList());
         } catch (RuntimeException e) {
             log.error("Dynamic row query failed: {}", e.getMessage());
             throw new ValidationException("Failed to fetch dynamic rows: " + e.getMessage(), e);
@@ -386,6 +417,7 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
 
                 // 2. Extract Fields
                 String table = (String) resolvedSource.get("table");
+                String alias = (String) resolvedSource.get("alias");
                 String column = (String) resolvedSource.get("column");
                 String typeStr = (String) resolvedSource.get("type");
 
@@ -398,9 +430,11 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
                 // SpecID format: "GLOBAL::{ParamName}"
                 out.add(new DataSourceSpec(
                         "GLOBAL::" + def.getName(),
-                        DataSourceSpec.Type.valueOf(typeStr.toUpperCase()),
+                        DataSourceSpec.Type.valueOf(typeStr.toUpperCase(Locale.ROOT)),
                         table,
+                        alias,
                         column,
+                        toJoinSpecs(safeList(resolvedSource.get("joins"))),
                         safeMap(resolvedSource.get("filters")),
                         "GlobalParam:" + def.getName()
                 ));
@@ -421,6 +455,40 @@ public class TemplateProcessorServiceImpl implements TemplateProcessorService {
             return nm;
         }
         return Map.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> safeList(Object o) {
+        if (o instanceof List<?> list) {
+            List<Map<String, Object>> normalized = new ArrayList<>();
+            for (Object item : list) {
+                normalized.add(safeMap(item));
+            }
+            return normalized;
+        }
+        return List.of();
+    }
+
+    private List<DataSourceSpec.JoinSpec> toJoinSpecs(List<Map<String, Object>> joinMaps) {
+        if (joinMaps == null || joinMaps.isEmpty()) {
+            return List.of();
+        }
+        List<DataSourceSpec.JoinSpec> joins = new ArrayList<>();
+        for (Map<String, Object> jm : joinMaps) {
+            Map<String, Object> on = safeMap(jm.get("on"));
+            joins.add(new DataSourceSpec.JoinSpec(
+                    DataSourceSpec.JoinSpec.JoinType.valueOf(String.valueOf(jm.get("type")).toUpperCase(Locale.ROOT)),
+                    (String) jm.get("table"),
+                    (String) jm.get("alias"),
+                    new DataSourceSpec.JoinOnSpec(
+                            (String) on.get("leftAlias"),
+                            (String) on.get("leftColumn"),
+                            (String) on.get("rightAlias"),
+                            (String) on.get("rightColumn")
+                    )
+            ));
+        }
+        return joins;
     }
 
     @Override
