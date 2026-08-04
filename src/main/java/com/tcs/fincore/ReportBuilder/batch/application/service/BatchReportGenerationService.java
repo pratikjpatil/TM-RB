@@ -1,8 +1,9 @@
 package com.tcs.fincore.ReportBuilder.batch.application.service;
 
-import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
 import com.tcs.fincore.ReportBuilder.batch.application.port.BatchReportGenerator;
+import com.tcs.fincore.ReportBuilder.batch.application.util.TemplateCloner;
+import com.tcs.fincore.ReportBuilder.batch.distributor.ResultDistributor;
 import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobRequest;
 import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.model.ExportModel;
@@ -10,13 +11,15 @@ import com.tcs.fincore.ReportBuilder.model.ReportTemplate;
 import com.tcs.fincore.ReportBuilder.service.aggregation.AggregatorService;
 import com.tcs.fincore.ReportBuilder.service.aggregation.DataSourceSpec;
 import com.tcs.fincore.ReportBuilder.service.calculation.CalculationService;
+import com.tcs.fincore.ReportBuilder.service.output.OutputTargetType;
+import com.tcs.fincore.ReportBuilder.service.output.ReportOutputRequest;
+import com.tcs.fincore.ReportBuilder.service.output.ReportOutputSink;
+import com.tcs.fincore.ReportBuilder.service.output.ReportOutputSinkResolver;
 import com.tcs.fincore.ReportBuilder.service.runtime.ReportRuntimeService;
 import com.tcs.fincore.ReportBuilder.service.storage.ReportExecutionDateResolver;
 import com.tcs.fincore.ReportBuilder.service.template.TemplateProcessorService;
-import com.tcs.fincore.ReportBuilder.batch.application.util.TemplateCloner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cglib.core.Local;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -42,8 +45,8 @@ public class BatchReportGenerationService implements BatchReportGenerator {
     private final AggregatorService aggregatorService;
     private final CalculationService calculationService;
     private final TemplateCloner templateCloner;
-    private final BatchReportStorageService reportStorageService;
     private final ReportExecutionDateResolver reportExecutionDateResolver;
+    private final ReportOutputSinkResolver outputSinkResolver;
 
     public void generateReportsInBatches(BatchJobRequest request,
                                          BatchAnalysisResult analysis,
@@ -63,6 +66,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
         status.setBatchProcessStartTime(LocalDateTime.now());
 
         List<List<String>> batches = splitIntoBatches(allValues, request.getBatchSize());
+        ReportOutputSink outputSink = outputSinkResolver.resolve(resolveTargetType(request));
         log.info("Phase 3: Generating {} reports in {} batches", totalReports, batches.size());
         log.info("Reports will be stored under date : {}", storageDate);
 
@@ -83,7 +87,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
-                        generateSingleReport(request, analysis, dimensionValue, storageDate);
+                        generateSingleReport(request, analysis, dimensionValue, storageDate, outputSink);
                         int done;
                         synchronized (status.getProgress()) {
                             status.getProgress().getCompletedValues().add(dimensionValue);
@@ -107,6 +111,7 @@ public class BatchReportGenerationService implements BatchReportGenerator {
             try {
                 CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]))
                         .get(generationTimeoutMinutes, TimeUnit.MINUTES);
+                flushSinkIfNeeded(request, analysis, storageDate, outputSink, batch.get(batch.size() - 1));
             } catch (TimeoutException e) {
                 log.error("Batch timed out after {}m for job {}", generationTimeoutMinutes, status.getJobId());
                 batchFutures.forEach(f -> f.cancel(true));
@@ -118,6 +123,8 @@ public class BatchReportGenerationService implements BatchReportGenerator {
             }
         }
 
+        flushSinkIfNeeded(request, analysis, storageDate, outputSink, null);
+
         int failed = status.getProgress().getFailedReports();
         int completed = completedCount.get();
         if (failed > 0 && completed > 0) {
@@ -127,7 +134,9 @@ public class BatchReportGenerationService implements BatchReportGenerator {
 
     private void generateSingleReport(BatchJobRequest request,
                                       BatchAnalysisResult analysis,
-                                      String dimensionValue, LocalDate storageDate) throws Exception {
+                                      String dimensionValue,
+                                      LocalDate storageDate,
+                                      ReportOutputSink outputSink) throws Exception {
         Map<String, Object> runInputs = new HashMap<>(analysis.staticContext());
         runInputs.put(request.getVaryingDimension().getParamName(), dimensionValue);
 
@@ -162,16 +171,50 @@ public class BatchReportGenerationService implements BatchReportGenerator {
         Map<String, Object> computed = calculationService.calculate(templateCopy, dataResults);
         ExportModel exportModel = templateProcessor.toExportModel(templateCopy, computed);
 
-        reportStorageService.saveReports(
-                request.getHdfsBasePath(),
-                storageDate,
-                request.getCommonParams(),
-                request.getVaryingDimension().getParamName(),
-                dimensionValue,
-                request.getOutputFormats(),
-                analysis.template(),
-                analysis.variant(),
-                exportModel);
+        ReportOutputRequest outputRequest = ReportOutputRequest.builder()
+                .hdfsBasePath(request.getHdfsBasePath())
+                .storageDate(storageDate)
+                .commonParams(request.getCommonParams())
+                .varyingParamName(request.getVaryingDimension().getParamName())
+                .dimensionValue(dimensionValue)
+                .requestedFormats(request.getOutputFormats())
+                .template(analysis.template())
+                .variant(analysis.variant())
+                .outputTargetConfigKey(request.getOutputTargetConfigKey())
+                .build();
+
+        outputSink.writeReport(outputRequest, exportModel);
+    }
+
+    private void flushSinkIfNeeded(BatchJobRequest request,
+                                   BatchAnalysisResult analysis,
+                                   LocalDate storageDate,
+                                   ReportOutputSink sink,
+                                   String dimensionValue) {
+        String sampleDimension = dimensionValue;
+        if (sampleDimension == null && request.getVaryingDimension() != null && request.getVaryingDimension().getValues() != null
+                && !request.getVaryingDimension().getValues().isEmpty()) {
+            sampleDimension = request.getVaryingDimension().getValues().get(0);
+        }
+        if (sampleDimension == null) {
+            return;
+        }
+        ReportOutputRequest outputRequest = ReportOutputRequest.builder()
+                .hdfsBasePath(request.getHdfsBasePath())
+                .storageDate(storageDate)
+                .commonParams(request.getCommonParams())
+                .varyingParamName(request.getVaryingDimension().getParamName())
+                .dimensionValue(sampleDimension)
+                .requestedFormats(request.getOutputFormats())
+                .template(analysis.template())
+                .variant(analysis.variant())
+                .outputTargetConfigKey(request.getOutputTargetConfigKey())
+                .build();
+        sink.flushPending(outputRequest);
+    }
+
+    private OutputTargetType resolveTargetType(BatchJobRequest request) {
+        return request.getOutputTargetType() == null ? OutputTargetType.HDFS : request.getOutputTargetType();
     }
 
     private List<List<String>> splitIntoBatches(List<String> items, int batchSize) {

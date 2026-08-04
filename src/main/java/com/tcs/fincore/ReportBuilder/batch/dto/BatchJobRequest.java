@@ -5,6 +5,7 @@ package com.tcs.fincore.ReportBuilder.batch.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
+import com.tcs.fincore.ReportBuilder.service.output.OutputTargetType;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -36,6 +37,8 @@ public class BatchJobRequest {
     // Output settings
     private List<String> outputFormats;  // ["pdf", "xlsx", "txt"]
     private String hdfsBasePath;         // Optional: override default HDFS path
+    private OutputTargetType outputTargetType; // Optional: defaults to HDFS when absent
+    private String outputTargetConfigKey; // Optional: sink-specific config key
 
     /**
      * Execution context carrying trigger-source and upstream correlation IDs.
