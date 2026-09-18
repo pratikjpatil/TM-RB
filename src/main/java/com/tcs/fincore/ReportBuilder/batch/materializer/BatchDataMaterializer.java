@@ -24,6 +24,8 @@ public class BatchDataMaterializer {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final BatchResultStore batchResultStore;
+    private final BatchMaterializationProperties materializationProperties;
+    private final MaterializationQueryLogger queryLogger;
 
     @Value("${report.batch.materialization.parallel-threads:3}")
     private int parallelThreads;
@@ -37,9 +39,13 @@ public class BatchDataMaterializer {
     //not final — created in @PostConstruct after @Value injection
     private ExecutorService materializationExecutor;
 
-    public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc, BatchResultStore batchResultStore) {
+    public BatchDataMaterializer(NamedParameterJdbcTemplate jdbc, BatchResultStore batchResultStore,
+                                 BatchMaterializationProperties materializationProperties,
+                                 MaterializationQueryLogger queryLogger) {
         this.jdbc = jdbc;
         this.batchResultStore = batchResultStore;
+        this.materializationProperties = materializationProperties;
+        this.queryLogger = queryLogger;
     }
 
     @PostConstruct
@@ -113,6 +119,47 @@ public class BatchDataMaterializer {
     }
 
     private int executeAndStore(QueryPattern pattern, String jobId, LongConsumer rowProgressConsumer) {
+        List<VaryingQueryPart> varyingValueParts = varyingValueParts(pattern);
+        AtomicInteger rowCount = new AtomicInteger();
+        BufferedResultWriter writer = writer(jobId, pattern.getPatternId());
+        try {
+            for (int part = 0; part < varyingValueParts.size(); part++) {
+                executeAndStorePart(pattern, varyingValueParts.get(part), part + 1, writer, rowCount, rowProgressConsumer);
+            }
+        } finally {
+            writer.flush(true);
+        }
+        return rowCount.get();
+    }
+
+    private List<VaryingQueryPart> varyingValueParts(QueryPattern pattern) {
+        if (pattern.getVaryingDimension() == null) {
+            return List.of(new VaryingQueryPart(Collections.emptyList(), false));
+        }
+        List<Object> values = new ArrayList<>(pattern.getVaryingDimension().getAllValues());
+        int threshold = Math.max(1, materializationProperties.getThreshold());
+        if (values.size() <= threshold) {
+            return List.of(new VaryingQueryPart(values, true));
+        }
+        if (materializationProperties.getMode() == VaryingDimensionFilterMode.OMIT) {
+            log.info("Pattern {} has {} varying values (threshold {}); omitting only its varying-dimension filter",
+                    pattern.getPatternId(), values.size(), threshold);
+            return List.of(new VaryingQueryPart(Collections.emptyList(), false));
+        }
+
+        int chunkSize = Math.max(1, materializationProperties.getChunkSize());
+        List<VaryingQueryPart> parts = new ArrayList<>((values.size() + chunkSize - 1) / chunkSize);
+        for (int start = 0; start < values.size(); start += chunkSize) {
+            parts.add(new VaryingQueryPart(values.subList(start, Math.min(start + chunkSize, values.size())), true));
+        }
+        log.info("Pattern {} has {} varying values; executing {} bounded query parts of at most {} values",
+                pattern.getPatternId(), values.size(), parts.size(), chunkSize);
+        return parts;
+    }
+
+    private void executeAndStorePart(QueryPattern pattern, VaryingQueryPart varyingPart, int queryPart,
+                                     BufferedResultWriter writer, AtomicInteger rowCount,
+                                     LongConsumer rowProgressConsumer) {
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT /*+ PARALLEL(8) */ ");
 
@@ -143,21 +190,19 @@ public class BatchDataMaterializer {
         sql.append(" AS AGG_VALUE FROM ").append(pattern.getTable()).append(" WHERE 1=1 ");
 
         Map<String, Object> params = new HashMap<>();
-        Map<String, Object> allFilters = buildUnifiedFilterMap(pattern);
+        Map<String, Object> allFilters = buildUnifiedFilterMap(pattern, varyingPart);
         FilterSqlBuilder.appendFilters(sql, params, allFilters);
 
         if (!"VALUE".equals(aggFunc) && !groupByCols.isEmpty()) {
             sql.append(" GROUP BY ").append(String.join(", ", groupByCols));
         }
 
-        log.debug("Pattern {} SQL: {} | params: {}", pattern.getPatternId(), sql, params);
+        queryLogger.log(pattern.getPatternId(), queryPart, sql.toString(), params, materializationProperties);
+        log.debug("Pattern {} SQL part {} prepared with {} bind groups", pattern.getPatternId(), queryPart, params.size());
         String dimColumn = pattern.getVaryingDimension() != null ? pattern.getVaryingDimension().getColumnName() : null;
         Set<String> bulkColumns = pattern.getBulkFilters() != null ? pattern.getBulkFilters().keySet() : Collections.emptySet();
 
-        AtomicInteger rowCount = new AtomicInteger();
-        BufferedResultWriter writer = writer(jobId, pattern.getPatternId());
-        try {
-            jdbc.query(sql.toString(), params, (RowCallbackHandler) rs -> {
+        jdbc.query(sql.toString(), params, (RowCallbackHandler) rs -> {
                 String dimValue = "DEFAULT";
                 if (dimColumn != null) {
                     Object dimRaw = rs.getObject(dimColumn);
@@ -177,26 +222,22 @@ public class BatchDataMaterializer {
                 writer.buffer(dimValue, bulkKey, value);
                 rowCount.incrementAndGet();
                 rowProgressConsumer.accept(1L);
-            });
-        } finally {
-            writer.flush(true);
-        }
-        return rowCount.get();
+        });
     }
 
     private BufferedResultWriter writer(String jobId, String patternId) {
         return new BufferedResultWriter(jobId, patternId, redisFlushSize, redisFlushIntervalMs);
     }
 
-    private Map<String, Object> buildUnifiedFilterMap(QueryPattern pattern) {
+    private Map<String, Object> buildUnifiedFilterMap(QueryPattern pattern, VaryingQueryPart varyingPart) {
         Map<String, Object> filters = new HashMap<>();
 
         if (pattern.getStaticFilters() != null) {
             filters.putAll(pattern.getStaticFilters());
         }
 
-        if (pattern.getVaryingDimension() != null) {
-            filters.put(pattern.getVaryingDimension().getColumnName(), Map.of("op", "IN", "value", new ArrayList<>(pattern.getVaryingDimension().getAllValues()), "dataType", pattern.getVaryingDimension().getDataType()));
+        if (pattern.getVaryingDimension() != null && varyingPart.applyFilter()) {
+            filters.put(pattern.getVaryingDimension().getColumnName(), Map.of("op", "IN", "value", new ArrayList<>(varyingPart.values()), "dataType", pattern.getVaryingDimension().getDataType()));
         }
 
         if (pattern.getBulkFilters() != null) {
@@ -218,6 +259,9 @@ public class BatchDataMaterializer {
         }
 
         return filters;
+    }
+
+    private record VaryingQueryPart(Collection<Object> values, boolean applyFilter) {
     }
 
     private String buildBulkKey(java.sql.ResultSet row, Set<String> bulkColumns) throws java.sql.SQLException {
