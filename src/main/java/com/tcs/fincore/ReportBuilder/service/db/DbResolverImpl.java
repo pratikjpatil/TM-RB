@@ -22,14 +22,14 @@ public class DbResolverImpl implements DbResolver {
 
     @Override
     public Object resolve(DataSourceSpec spec) {
-        // 1. Validation
+        // Validation
         FilterSqlBuilder.validateIdentifier(spec.getTable());
         FilterSqlBuilder.validateIdentifier(spec.getColumn());
 
         Map<String, Object> params = new HashMap<>();
         StringBuilder where = new StringBuilder(" WHERE 1=1 ");
 
-        // 2. Build filters
+        // Build filters
         FilterSqlBuilder.appendFilters(where, params, spec.getFilters());
 
         try {

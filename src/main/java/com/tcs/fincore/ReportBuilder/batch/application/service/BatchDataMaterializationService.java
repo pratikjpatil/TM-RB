@@ -41,7 +41,7 @@ public class BatchDataMaterializationService implements BatchDataMaterialization
             statusPersister.accept(status);
         }
 
-        batchResultStore.initializeJob(jobId, Duration.ofMinutes(statusTtlMinutes));
+        batchResultStore.initializeJob(jobId);
         AtomicLong pendingRows = new AtomicLong(0);
         dataMaterializer.materializeAll(jobId, analysis.patterns(), materializationTimeoutMinutes, rows -> {
             if (status == null) {

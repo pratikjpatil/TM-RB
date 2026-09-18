@@ -17,7 +17,7 @@ public class InMemoryBatchResultStore implements BatchResultStore {
     private final Map<String, Set<String>> availablePatterns = new ConcurrentHashMap<>();
 
     @Override
-    public void initializeJob(String jobId, Duration ttl) {
+    public void initializeJob(String jobId) {
         jobs.put(jobId, new ConcurrentHashMap<>());
         availablePatterns.put(jobId, ConcurrentHashMap.newKeySet());
     }

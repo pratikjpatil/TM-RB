@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Value;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 
 @Value
 @Builder
@@ -16,6 +17,7 @@ public class ReportLifecycleEvent {
     String processRunId;
     String stageId;
     String runId;
+    String reportType;
 
     // -- Job identity -----------------------------------------------------------
     /** Composite job ID derived from the three correlation IDs. */
@@ -26,12 +28,17 @@ public class ReportLifecycleEvent {
     String variantCode;
 
     // -- Event metadata ---------------------------------------------------------
-    EventType eventType;
+//    EventType eventType;
     JobStatus status;
+    String remarks;
 
     Instant eventTimestamp;
-    Instant jobStartTime;
-    Instant jobCompletionTime;
+//    Instant jobStartTime;
+//    Instant jobCompletionTime;
+
+    LocalDateTime startTime;
+    LocalDateTime endTime;
+
 
     // -- Optional detail --------------------------------------------------------
     Integer totalReports;
@@ -50,7 +57,8 @@ public class ReportLifecycleEvent {
             String jobId,
             String reportId,
             String templateId,
-            String variantCode) {
+            String variantCode,
+            String remarks) {
 
         return ReportLifecycleEvent.builder()
                 .processRunId(ctx.getProcessRunId())
@@ -60,10 +68,11 @@ public class ReportLifecycleEvent {
                 .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
-                .eventType(EventType.JOB_STARTED)
-                .status(JobStatus.RUNNING)
+//                .eventType(EventType.JOB_STARTED)
+                .remarks(remarks)
+                .status(JobStatus.STARTED)
                 .eventTimestamp(Instant.now())
-                .jobStartTime(Instant.now())
+                .startTime(LocalDateTime.now())
                 .build();
     }
 
@@ -76,7 +85,8 @@ public class ReportLifecycleEvent {
             int totalReports,
             int completedReports,
             int failedReports,
-            Instant startTime) {
+            LocalDateTime startTime,
+            String remarks) {
 
         return ReportLifecycleEvent.builder()
                 .processRunId(ctx.getProcessRunId())
@@ -86,11 +96,12 @@ public class ReportLifecycleEvent {
                 .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
-                .eventType(EventType.JOB_COMPLETED)
-                .status(failedReports > 0 ? JobStatus.PARTIALLY_COMPLETED : JobStatus.COMPLETED)
+//                .eventType(EventType.JOB_COMPLETED)
+                .status(failedReports > 0 ? JobStatus.FAILED : JobStatus.COMPLETED)
+                .remarks(remarks)
                 .eventTimestamp(Instant.now())
-                .jobStartTime(startTime)
-                .jobCompletionTime(Instant.now())
+                .startTime(startTime)
+                .endTime(LocalDateTime.now())
                 .totalReports(totalReports)
                 .completedReports(completedReports)
                 .failedReports(failedReports)
@@ -107,7 +118,8 @@ public class ReportLifecycleEvent {
             String variantCode,
             String errorMessage,
             String errorType,
-            Instant startTime) {
+            LocalDateTime startTime,
+            String remarks) {
 
         return ReportLifecycleEvent.builder()
                 .processRunId(ctx.getProcessRunId())
@@ -117,11 +129,12 @@ public class ReportLifecycleEvent {
                 .reportId(reportId)
                 .templateId(templateId)
                 .variantCode(variantCode)
-                .eventType(EventType.JOB_FAILED)
+//                .eventType(EventType.JOB_FAILED)
+                .remarks(remarks)
                 .status(JobStatus.FAILED)
                 .eventTimestamp(Instant.now())
-                .jobStartTime(startTime)
-                .jobCompletionTime(Instant.now())
+                .startTime(startTime)
+                .endTime(LocalDateTime.now())
                 .errorMessage(errorMessage)
                 .errorType(errorType)
                 .build();
@@ -137,17 +150,9 @@ public class ReportLifecycleEvent {
 
     // -- Enums ------------------------------------------------------------------
 
-    public enum EventType {
-        JOB_STARTED,
-        JOB_COMPLETED,
-        JOB_FAILED
-    }
-
     public enum JobStatus {
-        RUNNING,
+        STARTED,
         COMPLETED,
-        PARTIALLY_COMPLETED,
-        FAILED,
-        CANCELLED
+        FAILED
     }
 }

@@ -31,25 +31,25 @@ public class ReportExecutionService {
         try {
             log.info("Starting pipeline execution for report: {}", template.getReportMeta().getReportId());
 
-            // 1. Validate
+            // Validate
             templateProcessor.validate(template);
 
-            // 2. Expand Dynamic Rows if any (DB_LIST)
+            // Expand Dynamic Rows if any (DB_LIST)
             templateProcessor.expandDynamicRows(template);
 
-            // 3. Assign Cell IDs
+            // Assign Cell IDs
             templateProcessor.assignIds(template);
 
-            // 4. Extract Data Specs
+            // Extract Data Specs
             List<DataSourceSpec> specs = templateProcessor.extractDbSpecs(template);
 
-            // 5. Aggregate Data (DB Fetch)
+            // Aggregate Data (DB Fetch)
             Map<String, Object> dbResults = aggregatorService.fetchAggregates(specs);
 
-            // 6. Calculate Formulas
+            // Calculate Formulas
             Map<String, Object> computed = calculationService.calculate(template, dbResults);
 
-            // 7. Convert to Export Model
+            // Convert to Export Model
             return templateProcessor.toExportModel(template, computed);
 
         } catch (ValidationException ex) {

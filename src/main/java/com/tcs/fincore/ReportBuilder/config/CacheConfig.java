@@ -1,10 +1,10 @@
 package com.tcs.fincore.ReportBuilder.config;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
-import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
+import tools.jackson.databind.jsontype.PolymorphicTypeValidator;
+import tools.jackson.databind.DefaultTyping;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -30,7 +30,6 @@ public class CacheConfig {
     @Bean
     public CacheManager cacheManager(RedisConnectionFactory connectionFactory) {
 
-        // SECURITY FIX: Explicit allowlist restricts deserialization to ONLY our own model classes.
         PolymorphicTypeValidator typeValidator = BasicPolymorphicTypeValidator.builder()
                 .allowIfSubType("com.tcs.fincore.ReportBuilder.model.")
                 .allowIfSubType("com.tcs.fincore.ReportBuilder.dto.")
@@ -40,19 +39,17 @@ public class CacheConfig {
                 .allowIfSubType("java.lang.")
                 .build();
 
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
+        // (validator, typing, property name)
+        JsonMapper jsonMapper = JsonMapper.builder()
+                .activateDefaultTypingAsProperty(
+                        typeValidator,
+                        DefaultTyping.NON_FINAL,
+                        "@class"  // property name (default is "@class")
+                )
+                .build();
 
-        // REQUIRED FIX: Must use NON_FINAL so GenericJackson2JsonRedisSerializer
-        // writes the @class property for concrete classes (like ReportTemplate).
-        // Security is safely handled by the PolymorphicTypeValidator above.
-        objectMapper.activateDefaultTyping(
-                typeValidator,
-                ObjectMapper.DefaultTyping.NON_FINAL,
-                JsonTypeInfo.As.PROPERTY
-        );
-
-        GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(objectMapper);
+        GenericJacksonJsonRedisSerializer serializer =
+                new GenericJacksonJsonRedisSerializer(jsonMapper);
 
         RedisCacheConfiguration defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
                 .entryTtl(Duration.ofMinutes(5))

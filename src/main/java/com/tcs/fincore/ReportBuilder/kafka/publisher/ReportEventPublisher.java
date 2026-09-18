@@ -4,6 +4,7 @@ import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import com.tcs.fincore.ReportBuilder.kafka.context.ReportExecutionContext;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 
 public interface ReportEventPublisher {
 
@@ -26,7 +27,7 @@ public interface ReportEventPublisher {
      * @param status       final job status
      * @param jobStartTime the instant the job was accepted, for duration calculation
      */
-    void publishBatchTerminal(ReportExecutionContext context, BatchJobStatus status, Instant jobStartTime);
+    void publishBatchTerminal(ReportExecutionContext context, BatchJobStatus status, LocalDateTime jobStartTime);
 
     // =========================================================================
     // Single Mode (single-report jobs)
@@ -60,7 +61,7 @@ public interface ReportEventPublisher {
                                 String reportId,
                                 String templateId,
                                 String variantCode,
-                                Instant jobStartTime);
+                                LocalDateTime jobStartTime);
 
     void publishSingleFailed(ReportExecutionContext context,
                              String jobId,
@@ -69,5 +70,5 @@ public interface ReportEventPublisher {
                              String variantCode,
                              String errorMessage,
                              String errorType,
-                             Instant jobStartTime);
+                             LocalDateTime jobStartTime);
 }

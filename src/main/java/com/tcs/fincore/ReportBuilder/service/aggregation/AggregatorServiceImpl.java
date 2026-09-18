@@ -29,7 +29,6 @@ public class AggregatorServiceImpl implements AggregatorService {
 
 
     // ============================================================
-// FILE: AggregatorServiceImpl.java  — FIX #24
 // Semaphore permit count aligned with the actual thread pool
 // max size so the semaphore provides genuine back-pressure.
 // ============================================================
@@ -43,7 +42,7 @@ public class AggregatorServiceImpl implements AggregatorService {
         this.dbResolver = dbResolver;
         this.globalTimeoutMs = globalTimeoutMs;
 
-        // FIX #24: derive ONE limit used by BOTH the thread pool AND the semaphore,
+        // derive ONE limit used by BOTH the thread pool AND the semaphore,
         // so they are always in sync. Leave 10 connections free for other operations.
         int safeLimit = Math.max(1, Math.min(maxConcurrentQueries, maxDbConnections - 10));
         this.maxConcurrentQueries = safeLimit;
@@ -56,7 +55,6 @@ public class AggregatorServiceImpl implements AggregatorService {
                 new ThreadPoolExecutor.CallerRunsPolicy()
         );
 
-        // FIX #24: semaphore size now matches the thread pool max exactly.
         this.dbLimiter = new Semaphore(safeLimit, true);
 
         log.info("AggregatorService: safeLimit={}, timeout={}ms", safeLimit, globalTimeoutMs);
@@ -78,14 +76,14 @@ public class AggregatorServiceImpl implements AggregatorService {
         Instant start = Instant.now();
         Map<String, String> contextMap = MDC.getCopyOfContextMap();
 
-        // 1. Deduplication
+        // Deduplication
         Map<String, List<DataSourceSpec>> grouped = specs.stream()
                 .collect(Collectors.groupingBy(DataSourceSpec::logicalKey));
 
         log.info("Starting Aggregation: {} total specs condensed into {} unique queries",
                 specs.size(), grouped.size());
 
-        // 2. Async Execution with Throttling and Proper Error Handling
+        // Async Execution with Throttling and Proper Error Handling
         List<CompletableFuture<Map.Entry<String, Object>>> futures = new ArrayList<>();
 
         for (Map.Entry<String, List<DataSourceSpec>> entry : grouped.entrySet()) {

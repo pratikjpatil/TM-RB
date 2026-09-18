@@ -10,7 +10,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -51,13 +51,15 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
     @Override
     public void publishBatchStarted(ReportExecutionContext context, BatchJobStatus status) {
         if (!shouldPublish(context)) return;
-
+        String remark = String.format("RB batch generation started for templateId: %s, reportId: %s, variantCode: %s.", status.getTemplateId(), status.getReportId(), status.getVariantCode());
         ReportLifecycleEvent event = ReportLifecycleEvent.started(
                 context,
                 status.getJobId(),
                 status.getReportId(),
                 status.getTemplateId(),
-                status.getVariantCode());
+                status.getVariantCode(),
+                remark
+                );
 
         send(batchStartedTopic, event);
     }
@@ -65,7 +67,7 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
     @Override
     public void publishBatchTerminal(ReportExecutionContext context,
                                      BatchJobStatus status,
-                                     Instant jobStartTime) {
+                                     LocalDateTime jobStartTime) {
         if (!shouldPublish(context)) return;
 
         ReportLifecycleEvent event = buildBatchTerminalEvent(context, status, jobStartTime);
@@ -83,9 +85,9 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
                                      String templateId,
                                      String variantCode) {
         if (!shouldPublish(context)) return;
-
+        String remark = String.format("RB single generation started for templateId: %s, reportId: %s, variantCode: %s.", templateId, reportId, variantCode);
         ReportLifecycleEvent event = ReportLifecycleEvent.started(
-                context, jobId, reportId, templateId, variantCode);
+                context, jobId, reportId, templateId, variantCode, remark);
 
         send(singleStartedTopic, event);
     }
@@ -96,16 +98,17 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
                                        String reportId,
                                        String templateId,
                                        String variantCode,
-                                       Instant jobStartTime) {
+                                       LocalDateTime jobStartTime) {
         if (!shouldPublish(context)) return;
-
+        String remark = String.format("RB single generation completed for templateId: %s, reportId: %s, variantCode: %s.", templateId, reportId, variantCode);
         // Single mode = exactly 1 report, no partial completions
         ReportLifecycleEvent event = ReportLifecycleEvent.completed(
                 context, jobId, reportId, templateId, variantCode,
                 /* totalReports   */ 1,
                 /* completedReports */ 1,
                 /* failedReports  */ 0,
-                jobStartTime);
+                jobStartTime,
+                remark);
 
         send(singleCompletedTopic, event);
     }
@@ -118,12 +121,12 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
                                     String variantCode,
                                     String errorMessage,
                                     String errorType,
-                                    Instant jobStartTime) {
+                                    LocalDateTime jobStartTime) {
         if (!shouldPublish(context)) return;
-
+        String remark = String.format("RB single generation failed for reportId: %s, templateId: %s, err : %s, errType : %s", reportId, templateId, errorMessage, errorType);
         ReportLifecycleEvent event = ReportLifecycleEvent.failed(
                 context, jobId, reportId, templateId, variantCode,
-                errorMessage, errorType, jobStartTime);
+                errorMessage, errorType, jobStartTime, remark);
 
         send(singleCompletedTopic, event);
     }
@@ -153,10 +156,10 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
         future.whenComplete((result, ex) -> {
             if (ex != null) {
                 log.error("Failed to publish {} event to topic '{}' for jobId={}: {}",
-                        event.getEventType(), topic, event.getJobId(), ex.getMessage(), ex);
+                        event.getStatus(), topic, event.getJobId(), ex.getMessage(), ex);
             } else {
                 log.debug("Published {} event to topic '{}' partition={} offset={} jobId={}",
-                        event.getEventType(), topic,
+                        event.getStatus(), topic,
                         result.getRecordMetadata().partition(),
                         result.getRecordMetadata().offset(),
                         event.getJobId());
@@ -169,23 +172,30 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
      */
     private ReportLifecycleEvent buildBatchTerminalEvent(ReportExecutionContext context,
                                                          BatchJobStatus status,
-                                                         Instant jobStartTime) {
+                                                         LocalDateTime jobStartTime) {
         if (status.getStatus() == BatchJobStatus.JobState.FAILED) {
+            String errorMessage = status.getErrors() != null ? status.getErrors().getLastErrorMessage() : "Unknown error";
+            String errorType = "BatchJobFailure";
+            String remark = String.format("RB batch generation failed for reportId: %s, templateId: %s, err: %s, errType: %s", status.getReportId(), status.getTemplateId(), errorMessage, errorType);
+
             return ReportLifecycleEvent.failed(
                     context,
                     status.getJobId(),
                     status.getReportId(),
                     status.getTemplateId(),
                     status.getVariantCode(),
-                    status.getErrors() != null ? status.getErrors().getLastErrorMessage() : "Unknown error",
-                    "BatchJobFailure",
-                    jobStartTime);
+                    errorMessage,
+                    errorType,
+                    jobStartTime,
+                    remark);
         }
 
         BatchJobStatus.ProgressInfo progress = status.getProgress();
         int total     = progress != null ? progress.getTotalReports()     : 0;
         int completed = progress != null ? progress.getCompletedReports() : 0;
         int failed    = progress != null ? progress.getFailedReports()    : 0;
+
+        String remark = String.format("RB batch generation completed for reportId: %s, templateId: %s, failedReports: %d, completedReports: %d, totalReports: %d.", status.getReportId(), status.getTemplateId(), failed, completed, total);
 
         return ReportLifecycleEvent.completed(
                 context,
@@ -194,6 +204,6 @@ public class KafkaReportEventPublisher implements ReportEventPublisher {
                 status.getTemplateId(),
                 status.getVariantCode(),
                 total, completed, failed,
-                jobStartTime);
+                jobStartTime, remark);
     }
 }

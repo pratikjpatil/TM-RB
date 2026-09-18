@@ -7,7 +7,7 @@ import java.util.Set;
 
 public interface BatchResultStore {
 
-    void initializeJob(String jobId, Duration ttl);
+    void initializeJob(String jobId);
 
     void storeValue(String jobId, String patternId, String dimensionValue, String bulkKey, Object value);
 

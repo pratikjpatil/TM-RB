@@ -1,5 +1,5 @@
 # Use Red Hat UBI with OpenJDK 17 (if accessible internally)
-FROM alpine/java:22-jdk
+FROM artifactory.jfrog.sbi:443/cbops-docker-images/alpine_java:22-jdk
 
 # Set working directory inside container
 #WORKDIR /app

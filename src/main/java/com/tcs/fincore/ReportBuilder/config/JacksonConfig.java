@@ -1,9 +1,9 @@
 package com.tcs.fincore.ReportBuilder.config;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.SerializationFeature;
+import tools.jackson.databind.cfg.DateTimeFeature;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -12,19 +12,18 @@ import org.springframework.context.annotation.Primary;
 public class JacksonConfig {
 
     /**
-     * Primary application ObjectMapper — injected everywhere by default.
-     * - FAIL_ON_UNKNOWN_PROPERTIES disabled: tolerates DB/API schema evolution
-     *   without breaking deserialization (unknown fields are silently ignored).
-     * - JavaTimeModule: handles LocalDate, LocalDateTime, Instant natively.
-     * - WRITE_DATES_AS_TIMESTAMPS disabled: ISO-8601 strings in JSON output.
+     * Primary application JsonMapper for Spring Boot 4.1+
+     * - Uses immutable builder pattern (Jackson 3 requirement)
+     * - JavaTimeModule auto-registered by default
+     * - FAIL_ON_UNKNOWN_PROPERTIES disabled for schema evolution tolerance
+     * - ISO-8601 date strings (not timestamps)
      */
     @Bean
     @Primary
-    public ObjectMapper objectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        return mapper;
+    public JsonMapper jsonMapper() {
+        return JsonMapper.builder()
+                .disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .build();
     }
 }
