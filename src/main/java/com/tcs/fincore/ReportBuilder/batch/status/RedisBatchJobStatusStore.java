@@ -1,11 +1,11 @@
 package com.tcs.fincore.ReportBuilder.batch.status;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcs.fincore.ReportBuilder.batch.dto.BatchJobStatus;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -20,11 +20,11 @@ public class RedisBatchJobStatusStore implements BatchJobStatusStore {
     private static final String STATUS_KEY = "rb:batch:status:%s";
 
     private final StringRedisTemplate redisTemplate;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
 
-    public RedisBatchJobStatusStore(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public RedisBatchJobStatusStore(StringRedisTemplate redisTemplate, JsonMapper jsonMapper) {
         this.redisTemplate = redisTemplate;
-        this.objectMapper = objectMapper;
+        this.jsonMapper = jsonMapper;
     }
 
     @Override
@@ -108,17 +108,17 @@ public class RedisBatchJobStatusStore implements BatchJobStatusStore {
 
     private String toJson(BatchJobStatus status) {
         try {
-            return objectMapper.writeValueAsString(status);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize batch job status", e);
+            return jsonMapper.writeValueAsString(status);
+        } catch (JacksonException e) {
+            throw new RuntimeException(e);
         }
     }
 
     private BatchJobStatus fromJson(String payload) {
         try {
-            return objectMapper.readValue(payload, BatchJobStatus.class);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to deserialize batch job status", e);
+            return jsonMapper.readValue(payload, BatchJobStatus.class);
+        } catch (JacksonException e) {
+            throw new RuntimeException(e);
         }
     }
 }

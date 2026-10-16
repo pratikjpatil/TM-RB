@@ -153,9 +153,11 @@ public class BatchReportGenerationService implements BatchReportGenerator {
                 }
             }
             if (!fallbackSpecs.isEmpty()) {
+                log.info("Fetching fallback :: {}", fallbackSpecs);
                 dataResults.putAll(aggregatorService.fetchAggregates(fallbackSpecs));
             }
         } else {
+            log.info("analysis.useBatchMode() :: {}", analysis.useBatchMode());
             dataResults = aggregatorService.fetchAggregates(currentSpecs);
         }
 

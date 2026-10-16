@@ -1,6 +1,6 @@
 package com.tcs.fincore.ReportBuilder.batch.orchestrator;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+//import com.fasterxml.jackson.databind.JsonMapper;
 import com.tcs.fincore.ReportBuilder.batch.application.model.BatchAnalysisResult;
 import com.tcs.fincore.ReportBuilder.batch.application.port.BatchDataMaterializationCoordinator;
 import com.tcs.fincore.ReportBuilder.batch.application.port.BatchReportGenerator;
@@ -25,6 +25,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -41,7 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @RequiredArgsConstructor
 public class BatchJobOrchestrator {
 
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
     private final BatchTemplateAnalyzer batchTemplateAnalysisService;
     private final BatchDataMaterializationCoordinator batchDataMaterializationService;
     private final BatchReportGenerator batchReportGenerationService;
@@ -79,9 +80,9 @@ public class BatchJobOrchestrator {
 
     @PostConstruct
     public void setup() {
-        objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
-        objectMapper.configure(
-                com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+//        jsonMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+//        jsonMapper.configure(
+//                com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
         log.info("BatchJobOrchestrator initialized. materializationTimeout={}m, generationTimeout={}m",
                 materializationTimeoutMinutes, generationTimeoutMinutes);
@@ -157,7 +158,7 @@ public class BatchJobOrchestrator {
         AtomicBoolean cancelled = cancellationTokens.get(jobId);
         ReportExecutionContext context = executionContexts.getOrDefault(jobId, ReportExecutionContext.fromRest());
 
-        Instant jobStartInstant = Instant.now();
+        LocalDateTime jobStartInstant = LocalDateTime.now();
 
         try {
             log.info("=== BATCH JOB STARTED: {} (trigger={}) ===", jobId, context.getTriggerSource());
@@ -343,7 +344,7 @@ public class BatchJobOrchestrator {
         ReportExecutionContext context = executionContexts.getOrDefault(jobId, ReportExecutionContext.fromRest());
         eventPublisher.publishBatchTerminal(context, status,
                 status.getStartTime() != null
-                        ? status.getStartTime().toInstant(ZoneOffset.UTC) : Instant.now());
+                        ? status.getStartTime() : LocalDateTime.now());
 
         log.info("Job {} stopped — cancelled flag was set", jobId);
         persistStatus(status, true);
@@ -353,17 +354,16 @@ public class BatchJobOrchestrator {
         String reportId = request.getReportId();
         String templateId = request.getTemplateId();
 
-        if (reportId != null && !reportId.isBlank()) {
-            if (templateId == null || templateId.isBlank()) {
-                request.setTemplateId(reportMetadataService.findTemplateIdByReportId(reportId));
-            }
-            return;
-        }
-
+        // Single pass object hydration
         if (templateId != null && !templateId.isBlank()) {
             var template = reportMetadataService.getTemplate(templateId);
             if (template != null && template.getReportMeta() != null) {
                 request.setReportId(template.getReportMeta().getReportId());
+            }
+        } else if (reportId != null && !reportId.isBlank()) {
+            var template = reportMetadataService.getTemplateByReportId(reportId);
+            if (template != null && template.getReportMeta() != null) {
+                request.setTemplateId(template.getTemplateMeta().getTemplateId());
             }
         }
     }

@@ -7,32 +7,38 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.serialization.Serializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.*;
-import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
+import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
-import org.springframework.kafka.support.serializer.JsonDeserializer;
-import org.springframework.kafka.support.serializer.JsonSerializer;
-import org.springframework.util.backoff.ExponentialBackOff;
+import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
+import org.springframework.kafka.support.serializer.JacksonJsonSerializer;
 
 import java.util.HashMap;
 import java.util.Map;
 
 @EnableKafka
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class KafkaConfig {
 
-    // -- Connection -----------------------------------------------------------
+    private static final String TRUSTED_DTO_PACKAGE =
+            "*";
 
     @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
     private String bootstrapServers;
-
-    // -- Consumer commons -----------------------------------------------------
 
     @Value("${kafka.consumer.group-id:report-builder-group}")
     private String groupId;
@@ -46,8 +52,6 @@ public class KafkaConfig {
     @Value("${kafka.consumer.poll-timeout-ms:3000}")
     private long pollTimeoutMs;
 
-    // -- Retry / back-off -----------------------------------------------------
-
     @Value("${kafka.retry.initial-interval-ms:1000}")
     private long retryInitialIntervalMs;
 
@@ -60,134 +64,14 @@ public class KafkaConfig {
     @Value("${kafka.retry.max-attempts:3}")
     private int retryMaxAttempts;
 
-    // =========================================================================
-    // Shared error handler (same policy for both modes)
-    // =========================================================================
-
-    /**
-     * Shared {@link DefaultErrorHandler} with exponential back-off.
-     * After {@code retryMaxAttempts} failures the message is routed to the DLT.
-     */
     @Bean
-    public DefaultErrorHandler kafkaErrorHandler() {
-        ExponentialBackOff backOff = new ExponentialBackOff(retryInitialIntervalMs, retryMultiplier);
-        backOff.setMaxInterval(retryMaxIntervalMs);
-        backOff.setMaxAttempts(retryMaxAttempts);
-
-        DefaultErrorHandler handler = new DefaultErrorHandler(backOff);
-        // Validation errors are not retryable — send straight to DLT
-        handler.addNotRetryableExceptions(
-                org.springframework.kafka.support.serializer.DeserializationException.class);
-        return handler;
+    public KafkaTemplate<String, Object> deadLetterKafkaTemplate() {
+        KafkaTemplate<String, Object> template =
+                new KafkaTemplate<>(deadLetterProducerFactory());
+        template.setObservationEnabled(true);
+        return template;
     }
 
-    // =========================================================================
-    // BATCH MODE — KafkaReportTriggerMessage consumer
-    // =========================================================================
-
-    @Bean
-    public ConsumerFactory<String, KafkaReportTriggerMessage> batchReportTriggerConsumerFactory() {
-        Map<String, Object> props = buildBaseConsumerProps();
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-
-        JsonDeserializer<KafkaReportTriggerMessage> deserializer =
-                new JsonDeserializer<>(KafkaReportTriggerMessage.class);
-        deserializer.setRemoveTypeHeaders(false);
-        deserializer.addTrustedPackages("*");
-        deserializer.setUseTypeMapperForKey(false);
-
-        ErrorHandlingDeserializer<KafkaReportTriggerMessage> errorHandlingDeserializer =
-                new ErrorHandlingDeserializer<>(deserializer);
-
-        return new DefaultKafkaConsumerFactory<>(
-                props,
-                new StringDeserializer(),
-                errorHandlingDeserializer);
-    }
-
-    /**
-     * Listener container factory for batch-mode jobs.
-     * Bean name referenced by {@code @KafkaListener(containerFactory = "reportGenerationListenerContainerFactory")}
-     * in {@link com.tcs.fincore.ReportBuilder.kafka.consumer.ReportGenerationConsumer}.
-     */
-    @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, KafkaReportTriggerMessage>
-    reportGenerationListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, KafkaReportTriggerMessage> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(batchReportTriggerConsumerFactory());
-        factory.setConcurrency(concurrency);
-        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
-        factory.getContainerProperties().setPollTimeout(pollTimeoutMs);
-        factory.setCommonErrorHandler(kafkaErrorHandler());
-        return factory;
-    }
-
-    // =========================================================================
-    // SINGLE MODE — KafkaSingleReportTriggerMessage consumer
-    // =========================================================================
-
-    @Bean
-    public ConsumerFactory<String, KafkaSingleReportTriggerMessage>
-    singleModeReportTriggerConsumerFactory() {
-        Map<String, Object> props = buildBaseConsumerProps();
-        // Single-mode jobs share the same consumer group
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-
-        JsonDeserializer<KafkaSingleReportTriggerMessage> deserializer =
-                new JsonDeserializer<>(KafkaSingleReportTriggerMessage.class);
-        deserializer.setRemoveTypeHeaders(false);
-        deserializer.addTrustedPackages("*");
-        deserializer.setUseTypeMapperForKey(false);
-
-        ErrorHandlingDeserializer<KafkaSingleReportTriggerMessage> errorHandlingDeserializer =
-                new ErrorHandlingDeserializer<>(deserializer);
-
-        return new DefaultKafkaConsumerFactory<>(
-                props,
-                new StringDeserializer(),
-                errorHandlingDeserializer);
-    }
-
-    /**
-     * Listener container factory for single-mode jobs.
-     * Bean name referenced by {@code @KafkaListener(containerFactory = "singleModeReportListenerContainerFactory")}
-     * in {@link com.tcs.fincore.ReportBuilder.kafka.consumer.SingleModeReportGenerationConsumer}.
-     */
-    @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, KafkaSingleReportTriggerMessage>
-    singleModeReportListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, KafkaSingleReportTriggerMessage> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(singleModeReportTriggerConsumerFactory());
-        factory.setConcurrency(concurrency);
-        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
-        factory.getContainerProperties().setPollTimeout(pollTimeoutMs);
-        factory.setCommonErrorHandler(kafkaErrorHandler());
-        return factory;
-    }
-
-    // =========================================================================
-    // Shared producer — ReportLifecycleEvent (used by both modes)
-    // =========================================================================
-
-    @Bean
-    public ProducerFactory<String, ReportLifecycleEvent> reportEventProducerFactory() {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
-        // Idempotent producer ensures exactly-once delivery of lifecycle events
-        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
-        props.put(ProducerConfig.ACKS_CONFIG, "all");
-        props.put(ProducerConfig.RETRIES_CONFIG, 3);
-        return new DefaultKafkaProducerFactory<>(props);
-    }
-
-    /**
-     * Shared {@link KafkaTemplate} for publishing {@link ReportLifecycleEvent} messages
-     * to both batch and single mode lifecycle topics.
-     */
     @Bean
     public KafkaTemplate<String, ReportLifecycleEvent> reportEventKafkaTemplate() {
         KafkaTemplate<String, ReportLifecycleEvent> template =
@@ -196,21 +80,112 @@ public class KafkaConfig {
         return template;
     }
 
-    // =========================================================================
-    // Internal helpers
-    // =========================================================================
+    @Bean
+    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, Object> deadLetterKafkaTemplate) {
+        int maxRetries = Math.max(0, retryMaxAttempts - 1);
 
-    /**
-     * Builds base consumer properties shared across all consumer factories.
-     */
+        ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(maxRetries);
+        backOff.setInitialInterval(retryInitialIntervalMs);
+        backOff.setMaxInterval(retryMaxIntervalMs);
+        backOff.setMultiplier(retryMultiplier);
+
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(deadLetterKafkaTemplate);
+
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+        handler.addNotRetryableExceptions(DeserializationException.class);
+        return handler;
+    }
+
+    @Bean
+    public ConsumerFactory<String, KafkaReportTriggerMessage> batchReportTriggerConsumerFactory() {
+        return buildConsumerFactory(KafkaReportTriggerMessage.class);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, KafkaReportTriggerMessage>
+    reportGenerationListenerContainerFactory(DefaultErrorHandler kafkaErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, KafkaReportTriggerMessage> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(batchReportTriggerConsumerFactory());
+        factory.setConcurrency(concurrency);
+        factory.setBatchListener(false);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.getContainerProperties().setPollTimeout(pollTimeoutMs);
+        factory.setCommonErrorHandler(kafkaErrorHandler);
+        return factory;
+    }
+
+    @Bean
+    public ConsumerFactory<String, KafkaSingleReportTriggerMessage> singleModeReportTriggerConsumerFactory() {
+        return buildConsumerFactory(KafkaSingleReportTriggerMessage.class);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, KafkaSingleReportTriggerMessage>
+    singleModeReportListenerContainerFactory(DefaultErrorHandler kafkaErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, KafkaSingleReportTriggerMessage> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(singleModeReportTriggerConsumerFactory());
+        factory.setConcurrency(concurrency);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.getContainerProperties().setPollTimeout(pollTimeoutMs);
+        factory.setCommonErrorHandler(kafkaErrorHandler);
+        return factory;
+    }
+
+    private <T> DefaultKafkaConsumerFactory<String, T> buildConsumerFactory(Class<T> targetType) {
+        Map<String, Object> props = buildBaseConsumerProps();
+
+        JacksonJsonDeserializer<T> valueDeserializer = new JacksonJsonDeserializer<>(targetType);
+        valueDeserializer.ignoreTypeHeaders();
+        valueDeserializer.addTrustedPackages(TRUSTED_DTO_PACKAGE);
+
+        ErrorHandlingDeserializer<T> errorHandlingDeserializer =
+                new ErrorHandlingDeserializer<>(valueDeserializer);
+
+        DefaultKafkaConsumerFactory<String, T> factory =
+                new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), errorHandlingDeserializer);
+
+        factory.setConfigureDeserializers(false);
+        return factory;
+    }
+
+    private ProducerFactory<String, Object> deadLetterProducerFactory() {
+        return buildProducerFactory(new JacksonJsonSerializer<>());
+    }
+
+    private ProducerFactory<String, ReportLifecycleEvent> reportEventProducerFactory() {
+        return buildProducerFactory(new JacksonJsonSerializer<>());
+    }
+
+    private <V> DefaultKafkaProducerFactory<String, V> buildProducerFactory(Serializer<V> valueSerializer) {
+        Map<String, Object> props = buildBaseProducerProps();
+
+        DefaultKafkaProducerFactory<String, V> factory =
+                new DefaultKafkaProducerFactory<>(props, new StringSerializer(), valueSerializer);
+
+        factory.setConfigureSerializers(false);
+        return factory;
+    }
+
     private Map<String, Object> buildBaseConsumerProps() {
         Map<String, Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);  // manual ack
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPollRecords);
+        return props;
+    }
+
+    private Map<String, Object> buildBaseProducerProps() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.ACKS_CONFIG, "all");
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        props.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120000);
+        props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 30000);
         return props;
     }
 }

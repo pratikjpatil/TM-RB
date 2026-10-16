@@ -22,14 +22,14 @@ public class DbResolverImpl implements DbResolver {
 
     @Override
     public Object resolve(DataSourceSpec spec) {
-        // 1. Validation
+        // Validation
         FilterSqlBuilder.validateIdentifier(spec.getTable());
         FilterSqlBuilder.validateIdentifier(spec.getColumn());
 
         Map<String, Object> params = new HashMap<>();
         StringBuilder where = new StringBuilder(" WHERE 1=1 ");
 
-        // 2. Build filters
+        // Build filters
         FilterSqlBuilder.appendFilters(where, params, spec.getFilters());
 
         try {
@@ -77,8 +77,6 @@ public class DbResolverImpl implements DbResolver {
 
                     if (log.isDebugEnabled()) log.debug("SQL: {} | Params: {}", sql, params);
 
-                    // FIX: Reverted to standard queryForList.
-                    // The 'protected access' error happened because we tried to access internal Spring methods.
                     // Since we validate rows.size() > 1 below, fetching all rows (likely just 1) is safe.
                     List<Map<String, Object>> rows = jdbc.queryForList(sql, params);
 

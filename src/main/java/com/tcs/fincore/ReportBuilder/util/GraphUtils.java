@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.*;
 
 /**
- * PRODUCTION COMPONENT: Shared Graph Algorithms.
  * Used by CalculationService (for Cell Formulas) and GlobalParamEngine (for Parameters).
  */
 @Slf4j
@@ -25,11 +24,11 @@ public class GraphUtils {
             return Collections.emptyList();
         }
 
-        // 1. Initialize In-Degree Count
+        // Initialize In-Degree Count
         Map<String, Integer> inDegree = new HashMap<>();
         dependencies.keySet().forEach(k -> inDegree.put(k, 0));
 
-        // 2. Build Adjacency List (Reverse dependency: if A depends on B, edge is B -> A)
+        //  Build Adjacency List (Reverse dependency: if A depends on B, edge is B -> A)
         // We want to process B first, then A.
         Map<String, List<String>> adjList = new HashMap<>();
 
@@ -48,13 +47,13 @@ public class GraphUtils {
             }
         }
 
-        // 3. Initialize Queue with independent nodes (in-degree 0)
+        // Initialize Queue with independent nodes (in-degree 0)
         Deque<String> queue = new ArrayDeque<>();
         inDegree.forEach((node, degree) -> {
             if (degree == 0) queue.add(node);
         });
 
-        // 4. Process Queue
+        // Process Queue
         List<String> sortedOrder = new ArrayList<>(dependencies.size());
         while (!queue.isEmpty()) {
             String u = queue.poll();
@@ -72,7 +71,7 @@ public class GraphUtils {
             }
         }
 
-        // 5. Cycle Detection
+        // Cycle Detection
         if (sortedOrder.size() != dependencies.size()) {
             // Find nodes involved in cycle for better error reporting
             List<String> cyclicNodes = inDegree.entrySet().stream()

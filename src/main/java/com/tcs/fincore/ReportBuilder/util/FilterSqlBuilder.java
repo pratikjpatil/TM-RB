@@ -129,14 +129,14 @@ public class FilterSqlBuilder {
             String column = entry.getKey();
             Object filterValue = entry.getValue();
 
-            // Validate column name (SQL injection prevention)
+            // Validate column name
             validateIdentifier(column);
 
             // Base parameter name for this column
             String paramPrefix = column.replaceAll("[^A-Za-z0-9_]", "") + "_p";
 
             // ========================================
-            // 1. HANDLE LIST OF CONDITIONS (Multi-Operator Support)
+            // HANDLE LIST OF CONDITIONS (Multi-Operator Support)
             // ========================================
             if (filterValue instanceof List<?> list) {
 
@@ -203,7 +203,7 @@ public class FilterSqlBuilder {
     }
 
 
-    /// ////////////////////////////////////////////////////////////////////////////////////////////
+
 
     private static void appendSingleCondition(
             StringBuilder where, Map<String, Object> params,
@@ -252,7 +252,7 @@ public class FilterSqlBuilder {
                     return;
                 }
 
-                // SECURITY FIX: ENFORCE the IN list limit (never comment this out)
+                // ENFORCE the IN list limit
                 if (typedList.size() > MAX_IN_VALUES) {
                     throw new ValidationException(
                             "IN clause too large: " + typedList.size() +
@@ -286,7 +286,7 @@ public class FilterSqlBuilder {
     /// //////////////////////////////////////////////////
 
     /**
-     * ? OPTIMIZATION: Pad list to nearest bucket size
+     * OPTIMIZATION: Pad list to nearest bucket size
      * <p>
      * This helps Oracle reuse execution plans even when IN list sizes vary slightly
      * Oracle ignores NULLs in IN clauses, so padding is safe
